@@ -14,9 +14,13 @@ extern void GetTheta_Pro_NoTail(float l_l, float l_r, float theta_eq[3]);
 
 extern void GetK_Pro_Bipedal(float l_l, float l_r, float k[5][12], bool is_take_off);
 
+extern void GetK_Pro_Tripod(float l_l, float l_r, float k[4][9], bool is_take_off);
+
 extern void GetTheta_Pro_Bipedal(float l_l, float l_r, float theta_eq[4]);
 
 extern void GetT0_Pro_Bipedal(float l_l, float l_r, float T0_eq[2]);
+
+extern void GetT0_Pro_Tripod(float l_l, float l_r, float T0_eq[2]);
 
 extern void GetK_Bipedal(float l, float k[3][8], bool is_take_off);
 

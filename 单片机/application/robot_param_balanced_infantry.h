@@ -8,6 +8,7 @@
 #include "robot_typedef.h"
 
 // clang-format off
+#define TAIL_VERSION 1        // 尾巴版本
 #define __SELF_BOARD_ID C_BOARD_BALANCE_CHASSIS // 本板ID
 #define __GYRO_BIAS_YAW  0.003096855f           // 陀螺仪零飘，单位rad/s
 
@@ -65,25 +66,51 @@
 #define LEG_L5 (0.0f)    // (m)关节间距
 
 #define BODY_MASS            (13.0f)      // (kg)机身重量
-#define WHEEL_MASS           (0.82f)      // (kg)轮子重量
-#define TAIL_MASS            (0.86f)      // (kg)轮子重量 v1.0
+#define WHEEL_MASS           (0.823f)      // (kg)轮子重量
+#define LEG_MASS             (2.2f)      // (kg)单腿重量
 #define WHEEL_RADIUS         (0.13f)    // (m)轮子半径
 #define TAIL_WHEEL_RADIUS    (0.029f)
 #define WHEEL_START_TORQUE   (0.3f)      // (Nm)轮子起动力矩
-#define WHEEL_BASE           (0.386f)  // (m)驱动轮轴距
-#define WHEEL_BASE_2         (0.193f)  // (m)驱动轮轴距
+#define WHEEL_BASE           (0.414f)  // (m)驱动轮轴距
+#define WHEEL_BASE_2         (0.207f)  // (m)驱动轮轴距
+
+#if TAIL_VERSION
+#define TAIL_COM_to_MOTOR        (0.17755f)
+#define TAIL_BETA_COM_to_HAND    (0.06597f)
+#define TAIL_BETA_OMNI_to_HAND   (0.383972f)
+#define TAIL_POS_OFFSET          (0.089f)
+#define TAIL_POS_OFFSET_HORIZON  (0.07125f)
+#define TAIL_POS_OFFSET_VERTICAL (0.1105f)
+#define TAIL_LENGTH              (0.240f)
+#define TAIL_MASS                (0.83f)
+#define TAIL_BETA_INIT           (-14.0f)
+
+#else
+#define TAIL_COM_to_MOTOR        (0.23985f)
+#define TAIL_BETA_COM_to_HAND    (0.1034f)
+#define TAIL_BETA_OMNI_to_HAND   (0.3141f)
+#define TAIL_POS_OFFSET          (0.089f)
+#define TAIL_POS_OFFSET_HORIZON  (0.0f)
+#define TAIL_POS_OFFSET_VERTICAL (0.089f)
+#define TAIL_LENGTH              (0.330f)
+#define TAIL_MASS                (0.86f)
+#define TAIL_BETA_INIT           (2.0f)
+
+#endif
+
 // v1.1
 // #define TAIL_COM_to_MOTOR    (0.17755f)
 // #define TAIL_BETA_COM_to_HAND    (0.065972f)
 // #define TAIL_BETA_OMNI_to_HAND    (0.38397f)
 // v1.0
-#define TAIL_COM_to_MOTOR    (0.23985f)
-#define TAIL_BETA_COM_to_HAND    (0.1034f)
-#define TAIL_BETA_OMNI_to_HAND    (0.3141f)
-#define TAIL_POS_OFFSET (0.089f)
-#define TAIL_POS_OFFSET_HORIZON (0.0f)
-#define TAIL_POS_OFFSET_VERTICAL (0.089f)
-#define TAIL_LENGTH     (0.330f)
+// #define TAIL_COM_to_MOTOR        (0.23985f)
+// #define TAIL_BETA_COM_to_HAND    (0.1034f)
+// #define TAIL_BETA_OMNI_to_HAND   (0.3141f)
+// #define TAIL_POS_OFFSET          (0.089f)
+// #define TAIL_POS_OFFSET_HORIZON  (0.0f)
+// #define TAIL_POS_OFFSET_VERTICAL (0.089f)
+// #define TAIL_LENGTH              (0.330f)
+// #define TAIL_MASS                (0.86f)
 
 #define J0_ANGLE_OFFSET     (0.0f + M_PI) // (rad)关节0角度偏移量(电机0点到水平线的夹角)
 #define J1_ANGLE_OFFSET     (0.0f)         // (rad)关节1角度偏移量(电机0点到水平线的夹角)
@@ -123,9 +150,9 @@
 #define MAX_LEG_ANGLE        (MAX_DELTA_ROD_ANGLE)
 #define MAX_TAIL_ANGLE       (M_PI_2)
 #define MAX_SPEED            (3.5f)
-#define MAX_SPEED_VECTOR_VX  (3.5f)
-#define MAX_SPEED_VECTOR_VY  (3.5f)
-#define MAX_SPEED_VECTOR_WZ  (6.0f)
+#define MAX_SPEED_VECTOR_VX  (1.8f)
+#define MAX_SPEED_VECTOR_VY  (1.8f)
+#define MAX_SPEED_VECTOR_WZ  (5.0f)
 
 #define MAX_JOINT_TORQUE      (10.0f)   // (Nm)关节最大扭矩
 #define MAX_JOINT_TORQUE_JUMP (20.0f)  // (Nm)跳跃时的关节最大扭矩
@@ -159,7 +186,7 @@
 #define MIN_J2_ANGLE (-0.47f) // (rad)关节角度下限
 #define MIN_J3_ANGLE (-0.27f) // (rad)关节角度下限
 
-#define MIN_LEG_LENGTH       ( 0.15f)
+#define MIN_LEG_LENGTH       ( 0.16f)
 #define MIN_LEG_ANGLE        ( - MAX_DELTA_ROD_ANGLE)
 #define MIN_TAIL_ANGLE       ( 0.0f)
 #define MIN_SPEED            (-MAX_SPEED)
@@ -226,29 +253,77 @@
 #define ERRORSUM_UP_LEG_COOR       (0.20f)
 #define ERRORSUM_LOW_LEG_COOR      (-ERRORSUM_UP_LEG_COOR)
 
-// 尾巴适应地形补偿PID参数
-#define KP_CHASSIS_TAIL_COMP        (0.5f)
+#define TAIL_F_ff_RATIO 0.03f
+
+// 尾巴适应地形补偿PID参数 Bipedal用来防止爬坡卡死的
+#define KP_CHASSIS_TAIL_COMP        (0.15f)
 #define KI_CHASSIS_TAIL_COMP        (0.0f)
 #define KD_CHASSIS_TAIL_COMP        (0.01f)
 #define MAX_IOUT_CHASSIS_TAIL_COMP  (0.0f)
-#define MAX_OUT_CHASSIS_TAIL_COMP   (0.15f)
+#define MAX_OUT_CHASSIS_TAIL_COMP   (0.08f)
 #define N_CHASSIS_TAIL_COMP         (0.0f)
 
-// 尾巴抬升补偿PID参数
-#define KP_CHASSIS_TAIL_UP        (0.0f)
+// 尾巴抬升补偿PID参数 Tripod pitch调节
+#define KP_CHASSIS_TAIL_UP        (0.08f)
 #define KI_CHASSIS_TAIL_UP        (0.0f)
-#define KD_CHASSIS_TAIL_UP        (0.0f)
+#define KD_CHASSIS_TAIL_UP        (0.01f)
 #define MAX_IOUT_CHASSIS_TAIL_UP  (0.0f)
-#define MAX_OUT_CHASSIS_TAIL_UP   (0.5f)
-#define N_CHASSIS_TAIL_UP         (0.0f)
+#define MAX_OUT_CHASSIS_TAIL_UP   (0.12f)
+#define N_CHASSIS_TAIL_UP         (0.1f)
 
-// 尾巴末端轮子离地高度PID参数
-#define KP_CHASSIS_TAIL_Z        (300.0f)
+// 尾巴末端轮子离地高度PID参数 Tripod 竖直虚拟力
+#define KP_CHASSIS_TAIL_Z        (25.0f)
 #define KI_CHASSIS_TAIL_Z        (0.0f)
-#define KD_CHASSIS_TAIL_Z        (18.0f)
+#define KD_CHASSIS_TAIL_Z        (3.0f)
 #define MAX_IOUT_CHASSIS_TAIL_Z  (0.0f)
 #define MAX_OUT_CHASSIS_TAIL_Z   (5.0f)
-#define N_CHASSIS_TAIL_Z         (0.0f)
+#define N_CHASSIS_TAIL_Z         (0.1f)
+
+// 尾巴末端轮子离地高度PID参数
+#define KP_CHASSIS_LEG_T        (3.0f)
+#define KI_CHASSIS_LEG_T        (0.0f)
+#define KD_CHASSIS_LEG_T        (0.01f)
+#define MAX_IOUT_CHASSIS_LEG_T  (0.0f)
+#define MAX_OUT_CHASSIS_LEG_T   (15.0f)
+#define N_CHASSIS_LEG_T         (0.1f)
+
+// 轮 调pitch_dot的补偿扭矩
+#define KP_CHASSIS_PITCH_DOT        (30.0f)
+#define KI_CHASSIS_PITCH_DOT        (0.0f)
+#define KD_CHASSIS_PITCH_DOT        (2.0f)
+#define MAX_IOUT_CHASSIS_PITCH_DOT  (0.0f)
+#define MAX_OUT_CHASSIS_PITCH_DOT   (5.0f)
+#define N_CHASSIS_PITCH_DOT         (0.1f)
+
+// 尾 调x的补偿扭矩
+#define KP_CHASSIS_TAIL_X        (0.05f)
+#define KI_CHASSIS_TAIL_X        (0.0f)
+#define KD_CHASSIS_TAIL_X        (0.001f)
+#define MAX_IOUT_CHASSIS_TAIL_X  (0.0f)
+#define MAX_OUT_CHASSIS_TAIL_X   (1.0f)
+#define N_CHASSIS_TAIL_X         (0.1f)
+
+// 尾 调x的补偿扭矩
+#define KP_CHASSIS_TAIL_TORQUE        (0.0f)
+#define KI_CHASSIS_TAIL_TORQUE        (0.0f)
+#define KD_CHASSIS_TAIL_TORQUE        (0.0f)
+#define MAX_IOUT_CHASSIS_TAIL_TORQUE  (0.0f)
+#define MAX_OUT_CHASSIS_TAIL_TORQUE   (5.0f)
+#define N_CHASSIS_TAIL_TORQUE         (0.1f)
+
+// ================= 台阶检测 / 台阶抬升补偿 =================
+#define STAIR_DETECT_WINDOW_S        (0.20f)   // 判定时间窗：0.20s
+#define STAIR_HOLD_TIME_S            (0.15f)   // 触发后保持时间：0.15s
+
+#define STAIR_VX_CMD_MIN             (0.10f)   // 至少有这么大的前进速度命令才考虑“卡住”
+#define STAIR_DX_REF_MIN             (0.010f)  // 时间窗内期望位移至少增加 10 mm
+#define STAIR_DX_FDB_MIN             (0.002f)  // 时间窗内实际位移小于 2 mm 认为几乎没动
+#define STAIR_DX_FDB_BACKWARD        (-0.001f) // 时间窗内实际位移小于 -1 mm 认为反向了
+
+#define TAIL_UP_X_DB                 (0.005f)  // 水平距离死区：5 mm
+#define TAIL_UP_X_KP                 (0.5f)   // 水平误差 -> 竖直补偿 比例
+#define TAIL_UP_X_MAX                (0.1f)  // 最大额外抬升补偿：25 mm
+#define TAIL_UP_X_ALPHA              (0.10f)   // 一阶低通系数
 
 //roll轴跟踪速度环PID参数
 // #define KP_CHASSIS_ROLL_VELOCITY        (0.6f)

@@ -250,6 +250,10 @@ typedef struct
     pid_type_def tail_comp;
     pid_type_def tail_up;
     pid_type_def tail_z;
+    pid_type_def tail_x;
+    pid_type_def tail_T;
+    pid_type_def leg_T;
+    pid_type_def pitch_dot;
     pid_type_def stand_up;
     pid_type_def wheel_stop[2];
 } PID_t;
