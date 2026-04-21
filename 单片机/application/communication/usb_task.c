@@ -56,8 +56,8 @@ uint32_t usb_high_water;
 
 #define CheckDurationAndSend(send_name)                                                  \
     do {                                                                                 \
-        if ((HAL_GetTick() - LAST_SEND_TIME.##send_name) >= SEND_DURATION_##send_name) { \
-            LAST_SEND_TIME.##send_name = HAL_GetTick();                                  \
+        if ((HAL_GetTick() - LAST_SEND_TIME.send_name) >= SEND_DURATION_##send_name) {   \
+            LAST_SEND_TIME.send_name = HAL_GetTick();                                    \
             UsbSend##send_name##Data();                                                  \
         }                                                                                \
     } while (0)
@@ -224,28 +224,50 @@ static void UsbReceiveData(void)
     static uint8_t * rx_data_start_address = USB_RX_BUF;  // 接收数据包时存放于缓存区的起始位置
     static uint8_t * rx_data_end_address;  // 接收数据包时存放于缓存区的结束位置
     uint8_t * sof_address = USB_RX_BUF;
+    uint8_t * rx_buffer_limit;
+    uint16_t valid_len;
 
-    // 计算数据包的结束位置
-    rx_data_end_address = rx_data_start_address + USB_RECEIVE_LEN;
-    // 读取数据
-    USB_Receive(rx_data_start_address, &len);  // Read data into the buffer
+    // 读取数据，len 由底层返回本次可处理长度
+    len = USB_RECEIVE_LEN;
+    USB_Receive(rx_data_start_address, &len);
+
+    valid_len = (len > USB_RECEIVE_LEN) ? USB_RECEIVE_LEN : (uint16_t)len;
+    if (valid_len == 0) {
+        return;
+    }
+
+    rx_buffer_limit = rx_data_start_address + valid_len;
+    rx_data_end_address = rx_buffer_limit - 1;
 
     while (sof_address <= rx_data_end_address) {  // 解析缓冲区中的所有数据包
         // 寻找帧头位置
-        while (*(sof_address) != RECEIVE_SOF && (sof_address <= rx_data_end_address)) {
+        while ((sof_address <= rx_data_end_address) && (*(sof_address) != RECEIVE_SOF)) {
             sof_address++;
         }
         // 判断是否超出接收数据范围
         if (sof_address > rx_data_end_address) {
             break;  // 退出循环
         }
+
+        // 剩余长度不足以构成帧头，留到下一轮
+        if ((uint16_t)(rx_data_end_address - sof_address + 1) < HEADER_SIZE) {
+            break;
+        }
+
         // 检查CRC8校验
         bool crc8_ok = verify_CRC8_check_sum(sof_address, HEADER_SIZE);
         if (crc8_ok) {
             uint8_t data_len = sof_address[1];
             uint8_t data_id = sof_address[2];
+            uint16_t frame_len = (uint16_t)(HEADER_SIZE + data_len + 2);
+
+            // 剩余长度不足整帧，留到下一轮
+            if ((uint16_t)(rx_data_end_address - sof_address + 1) < frame_len) {
+                break;
+            }
+
             // 检查整包CRC16校验 4: header size, 2: crc16 size
-            bool crc16_ok = verify_CRC16_check_sum(sof_address, 4 + data_len + 2);
+            bool crc16_ok = verify_CRC16_check_sum(sof_address, frame_len);
             if (crc16_ok) {
                 switch (data_id) {
                     case ROBOT_CMD_DATA_RECEIVE_ID: {
@@ -258,22 +280,25 @@ static void UsbReceiveData(void)
                     default:
                         break;
                 }
-                if (*((uint32_t *)(&sof_address[4])) > LATEST_RX_TIMESTAMP) {
+
+                if ((frame_len >= (HEADER_SIZE + sizeof(uint32_t))) &&
+                    (*((uint32_t *)(&sof_address[4])) > LATEST_RX_TIMESTAMP)) {
                     LATEST_RX_TIMESTAMP = *((uint32_t *)(&sof_address[4]));
                     RECEIVE_TIME = HAL_GetTick();
                 }
             }
-            sof_address += (data_len + HEADER_SIZE + 2);
+            sof_address += frame_len;
         } else {  //CRC8校验失败，移动到下一个字节
             sof_address++;
         }
     }
+
     // 更新下一次接收数据的起始位置
-    if (sof_address > rx_data_start_address + USB_RECEIVE_LEN) {
+    if (sof_address >= rx_buffer_limit) {
         // 缓冲区中没有剩余数据，下次接收数据的起始位置为缓冲区的起始位置
         rx_data_start_address = USB_RX_BUF;
     } else {
-        uint16_t remaining_data_len = USB_RECEIVE_LEN - (sof_address - rx_data_start_address);
+        uint16_t remaining_data_len = (uint16_t)(rx_buffer_limit - sof_address);
         // 缓冲区中有剩余数据，下次接收数据的起始位置为缓冲区中剩余数据的起始位置
         rx_data_start_address = USB_RX_BUF + remaining_data_len;
         // 将剩余数据移到缓冲区的起始位置
