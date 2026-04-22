@@ -46,7 +46,7 @@ uint32_t usb_high_water;
 #define SEND_DURATION_Imu         5   // ms
 #define SEND_DURATION_RobotStateInfo   10  // ms
 #define SEND_DURATION_RobotMotion 10  // ms
-#define SEND_DURATION_RobotStatus  10// ms
+#define SEND_DURATION_RobotTarget 10  // ms
 
 // clang-format on
 
@@ -67,6 +67,7 @@ static uint8_t USB_RX_BUF[USB_RX_DATA_SIZE];
 
 static const Imu_t * IMU;
 static const ChassisSpeedVector_t * FDB_SPEED_VECTOR;
+static const ChassisSpeedVector_t * REF_SPEED_VECTOR;
 
 // 判断USB连接状态用到的一些变量
 static bool USB_OFFLINE = true;
@@ -78,6 +79,7 @@ static uint32_t CONTINUE_RECEIVE_CNT = 0;
 // clang-format off
 static SendDataImu_s         SEND_DATA_IMU;
 static SendDataRobotMotion_s SEND_ROBOT_MOTION_DATA;
+static SendDataRobotTarget_s SEND_ROBOT_TARGET_DATA;
 
 // clang-format on
 
@@ -94,6 +96,7 @@ typedef struct
 {
     uint32_t Imu;
     uint32_t RobotMotion;
+    uint32_t RobotTarget;
 } LastSendTime_t;
 static LastSendTime_t LAST_SEND_TIME;
 
@@ -109,6 +112,7 @@ static void UsbInit(void);
 /*******************************************************************************/
 static void UsbSendImuData(void);
 static void UsbSendRobotMotionData(void);
+static void UsbSendRobotTargetData(void);
 
 /*******************************************************************************/
 /* Receive Function                                                            */
@@ -173,6 +177,7 @@ static void UsbInit(void)
     // 订阅数据
     IMU = Subscribe(IMU_NAME);                             // 获取IMU数据指针
     FDB_SPEED_VECTOR = Subscribe(CHASSIS_FDB_SPEED_NAME);  // 获取底盘速度矢量指针
+    REF_SPEED_VECTOR = Subscribe(CHASSIS_REF_SPEED_NAME);  // 获取底盘目标速度矢量指针
 
     // 数据置零
     memset(&LAST_SEND_TIME, 0, sizeof(LastSendTime_t));
@@ -198,6 +203,14 @@ static void UsbInit(void)
     append_CRC8_check_sum(  // 添加帧头 CRC8 校验位
         (uint8_t *)(&SEND_ROBOT_MOTION_DATA.frame_header),
         sizeof(SEND_ROBOT_MOTION_DATA.frame_header));
+
+    // 11.初始化机器人目标速度数据
+    SEND_ROBOT_TARGET_DATA.frame_header.sof = SEND_SOF;
+    SEND_ROBOT_TARGET_DATA.frame_header.len = (uint8_t)(sizeof(SendDataRobotTarget_s) - 6);
+    SEND_ROBOT_TARGET_DATA.frame_header.id = ROBOT_TARGET_DATA_SEND_ID;
+    append_CRC8_check_sum(  // 添加帧头 CRC8 校验位
+        (uint8_t *)(&SEND_ROBOT_TARGET_DATA.frame_header),
+        sizeof(SEND_ROBOT_TARGET_DATA.frame_header));
 }   
 
 /**
@@ -211,6 +224,8 @@ static void UsbSendData(void)
     CheckDurationAndSend(Imu);
     // 发送RobotMotion数据
     CheckDurationAndSend(RobotMotion);
+    // 发送RobotTarget数据
+    CheckDurationAndSend(RobotTarget);
 }
 
 /**
@@ -352,6 +367,26 @@ static void UsbSendRobotMotionData(void)
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_MOTION_DATA, sizeof(SendDataRobotMotion_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_MOTION_DATA, sizeof(SendDataRobotMotion_s));
+}
+
+/**
+ * @brief 发送机器人目标速度数据
+ * @param duration 发送周期
+ */
+static void UsbSendRobotTargetData(void)
+{
+    if (REF_SPEED_VECTOR == NULL) {
+        return;
+    }
+
+    SEND_ROBOT_TARGET_DATA.time_stamp = HAL_GetTick();
+
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.vx = REF_SPEED_VECTOR->vx;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.vy = REF_SPEED_VECTOR->vy;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.wz = REF_SPEED_VECTOR->wz;
+
+    append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
+    USB_Transmit((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
 }
 
 /*******************************************************************************/

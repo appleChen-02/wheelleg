@@ -9,6 +9,7 @@ Features:
 - Decode known packet IDs:
   - 0x02: IMU
   - 0x08: RobotMotion
+    - 0x0B: RobotTarget
 - Save CSV files directly readable by MATLAB.
 - Optional MAT export on exit (requires scipy).
 
@@ -42,6 +43,7 @@ SOF = 0x5A
 # 如果下位机协议以后增加新包，只需要在这里补一个分支并同步 MATLAB 侧即可。
 ID_IMU = 0x02
 ID_ROBOT_MOTION = 0x08
+ID_ROBOT_TARGET = 0x0B
 
 CRC8_INIT = 0xFF
 # CRC8 表直接对齐下位机固件中的查表法实现，保证 Python 端和 MCU 端校验结果一致。
@@ -115,22 +117,28 @@ class CsvSink:
         self.motion_file = open(
             os.path.join(outdir, "robot_motion.csv"), "w", newline="", encoding="utf-8"
         )
+        self.target_file = open(
+            os.path.join(outdir, "robot_target.csv"), "w", newline="", encoding="utf-8"
+        )
         self.unknown_file = open(
             os.path.join(outdir, "unknown_frames.csv"), "w", newline="", encoding="utf-8"
         )
 
         self.imu_writer = csv.writer(self.imu_file)
         self.motion_writer = csv.writer(self.motion_file)
+        self.target_writer = csv.writer(self.target_file)
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
             ["host_time_s", "tick_ms", "yaw", "pitch", "roll", "yaw_vel", "pitch_vel", "roll_vel"]
         )
         self.motion_writer.writerow(["host_time_s", "tick_ms", "vx", "vy", "wz"])
+        self.target_writer.writerow(["host_time_s", "tick_ms", "vx", "vy", "wz"])
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
         self.motion_rows: List[List[float]] = []
+        self.target_rows: List[List[float]] = []
 
     def write_imu(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
@@ -142,18 +150,25 @@ class CsvSink:
         self.motion_writer.writerow(line)
         self.motion_rows.append(line)
 
+    def write_target(self, host_t: float, row: List[float]) -> None:
+        line = [host_t] + row
+        self.target_writer.writerow(line)
+        self.target_rows.append(line)
+
     def write_unknown(self, host_t: float, pkt_id: int, payload_len: int, frame_hex: str) -> None:
         self.unknown_writer.writerow([host_t, f"0x{pkt_id:02X}", payload_len, frame_hex])
 
     def flush(self) -> None:
         self.imu_file.flush()
         self.motion_file.flush()
+        self.target_file.flush()
         self.unknown_file.flush()
 
     def close(self) -> None:
         self.flush()
         self.imu_file.close()
         self.motion_file.close()
+        self.target_file.close()
         self.unknown_file.close()
 
 
@@ -232,6 +247,14 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "row": [tick_ms, vx, vy, wz],
         }
 
+    if pkt_id == ID_ROBOT_TARGET and len(payload) == 16:
+        tick_ms, vx, vy, wz = struct.unpack("<I3f", payload)
+        return {
+            "type": "target",
+            "host_time": host_t,
+            "row": [tick_ms, vx, vy, wz],
+        }
+
     return {
         "type": "unknown",
         "host_time": host_t,
@@ -254,6 +277,9 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "imu": np.array(sink.imu_rows, dtype=float) if sink.imu_rows else np.empty((0, 8), dtype=float),
         "robot_motion": np.array(sink.motion_rows, dtype=float)
         if sink.motion_rows
+        else np.empty((0, 5), dtype=float),
+        "robot_target": np.array(sink.target_rows, dtype=float)
+        if sink.target_rows
         else np.empty((0, 5), dtype=float),
     }
 
@@ -314,6 +340,8 @@ def run(args: argparse.Namespace) -> int:
                             sink.write_imu(host_t, list(decoded["row"]))
                         elif kind == "motion":
                             sink.write_motion(host_t, list(decoded["row"]))
+                        elif kind == "target":
+                            sink.write_target(host_t, list(decoded["row"]))
                         else:
                             parser.stats.unknown_id += 1
                             sink.write_unknown(

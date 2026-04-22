@@ -114,7 +114,11 @@ ChassisMode_e last_mode = CHASSIS_TRIPOD;
 
 /*-------------------- Publish --------------------*/
 
-void ChassisPublish(void) { Publish(&CHASSIS.fdb.speed_vector, CHASSIS_FDB_SPEED_NAME); }
+void ChassisPublish(void)
+{
+    Publish(&CHASSIS.fdb.speed_vector, CHASSIS_FDB_SPEED_NAME);
+    Publish(&CHASSIS.ref.speed_vector, CHASSIS_REF_SPEED_NAME);
+}
 static void ResetXStateOnModeSwitch(void);
 
 /******************************************************************/

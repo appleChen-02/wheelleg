@@ -6,6 +6,7 @@
 // 数据名称宏
 #define IMU_NAME "imu_data"
 #define CHASSIS_FDB_SPEED_NAME "chassis_fdb_speed"
+#define CHASSIS_REF_SPEED_NAME "chassis_ref_speed"
 #define ROBOT_CMD_DATA_NAME "ROBOT_CMD_DATA"
 #define USB_OFFLINE_NAME "usb_offline"
 #define VIRTUAL_RC_NAME "virtual_rc_ctrl"
