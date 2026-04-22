@@ -65,8 +65,6 @@ void chassis_task(void const * pvParameters)
     // 初始化底盘
     ChassisInit();
 
-    // static uint8_t clamp_test_step = 0;
-    // static uint32_t clamp_test_next_tick = 0;
 
     TickType_t last = xTaskGetTickCount();
     const TickType_t period = pdMS_TO_TICKS(CHASSIS_CONTROL_TIME_MS);

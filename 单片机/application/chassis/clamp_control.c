@@ -14,6 +14,7 @@
 #include "bsp_uart.h"
 #include "cmsis_os.h"  
 
+
 #define CLAMP_UART_RX_MAX_LEN 16
 #define CLAMP_INIT_TOTAL_TIMEOUT_MS 5000
 #define CLAMP_STAGE_TIMEOUT_MS 100
@@ -511,12 +512,12 @@ void ClampInit(void)
     clamp_init_state = CLAMP_INIT_SEND_CLEAR;
 
     // 初始化完成后默认目标设为中位，避免上电后先突发到0x00（全开端）。
-    clamp_target_position = 0x80;
+    clamp_target_position = 0x00;
     clamp_target_force = 0xFF;
     clamp_target_speed = 0xFF;
     // 初始化完成后先下发一帧默认目标，避免控制状态机在IDLE长期空转。
     clamp_target_pending = 1;
-    clamp_active_position = 0x80;
+    clamp_active_position = 0x00;
     clamp_active_force = 0xFF;
     clamp_active_speed = 0xFF;
 
