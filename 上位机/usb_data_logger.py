@@ -9,12 +9,11 @@ Features:
 - Decode known packet IDs:
   - 0x02: IMU
   - 0x08: RobotMotion
-  - 0x0C: SolvedRcCmd (if firmware sends it)
 - Save CSV files directly readable by MATLAB.
 - Optional MAT export on exit (requires scipy).
 
 Example:
-  python usb_data_logger.py --port COM6 --baud 115200 --outdir ./log --save-mat
+    python usb_data_logger.py --port /dev/ttyACM0 --baud 115200 --outdir ./log --save-mat
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from typing import Dict, List, Optional
 
 try:
     import serial  # type: ignore
+    from serial.tools import list_ports  # type: ignore
 except Exception as exc:
     raise SystemExit(
         "pyserial is required. Install with: pip install pyserial\n"
@@ -42,7 +42,6 @@ SOF = 0x5A
 # 如果下位机协议以后增加新包，只需要在这里补一个分支并同步 MATLAB 侧即可。
 ID_IMU = 0x02
 ID_ROBOT_MOTION = 0x08
-ID_SOLVED_RC_CMD = 0x0C
 
 CRC8_INIT = 0xFF
 # CRC8 表直接对齐下位机固件中的查表法实现，保证 Python 端和 MCU 端校验结果一致。
@@ -116,48 +115,22 @@ class CsvSink:
         self.motion_file = open(
             os.path.join(outdir, "robot_motion.csv"), "w", newline="", encoding="utf-8"
         )
-        self.solved_file = open(
-            os.path.join(outdir, "solved_rc_cmd.csv"), "w", newline="", encoding="utf-8"
-        )
         self.unknown_file = open(
             os.path.join(outdir, "unknown_frames.csv"), "w", newline="", encoding="utf-8"
         )
 
         self.imu_writer = csv.writer(self.imu_file)
         self.motion_writer = csv.writer(self.motion_file)
-        self.solved_writer = csv.writer(self.solved_file)
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
             ["host_time_s", "tick_ms", "yaw", "pitch", "roll", "yaw_vel", "pitch_vel", "roll_vel"]
         )
         self.motion_writer.writerow(["host_time_s", "tick_ms", "vx", "vy", "wz"])
-        self.solved_writer.writerow(
-            [
-                "host_time_s",
-                "tick_ms",
-                "mode",
-                "step",
-                "rc_offline",
-                "reserved",
-                "vx",
-                "vy",
-                "wz",
-                "roll",
-                "pitch",
-                "yaw",
-                "leg_length_l",
-                "leg_length_r",
-                "leg_angle_l",
-                "leg_angle_r",
-                "tail_beta",
-            ]
-        )
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
         self.motion_rows: List[List[float]] = []
-        self.solved_rows: List[List[float]] = []
 
     def write_imu(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
@@ -169,25 +142,18 @@ class CsvSink:
         self.motion_writer.writerow(line)
         self.motion_rows.append(line)
 
-    def write_solved(self, host_t: float, row: List[float]) -> None:
-        line = [host_t] + row
-        self.solved_writer.writerow(line)
-        self.solved_rows.append(line)
-
     def write_unknown(self, host_t: float, pkt_id: int, payload_len: int, frame_hex: str) -> None:
         self.unknown_writer.writerow([host_t, f"0x{pkt_id:02X}", payload_len, frame_hex])
 
     def flush(self) -> None:
         self.imu_file.flush()
         self.motion_file.flush()
-        self.solved_file.flush()
         self.unknown_file.flush()
 
     def close(self) -> None:
         self.flush()
         self.imu_file.close()
         self.motion_file.close()
-        self.solved_file.close()
         self.unknown_file.close()
 
 
@@ -266,20 +232,6 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "row": [tick_ms, vx, vy, wz],
         }
 
-    if pkt_id == ID_SOLVED_RC_CMD and len(payload) == 52:
-        vals = struct.unpack("<IBBBB11f", payload)
-        tick_ms = vals[0]
-        mode = vals[1]
-        step = vals[2]
-        rc_offline = vals[3]
-        reserved = vals[4]
-        floats = list(vals[5:])
-        return {
-            "type": "solved",
-            "host_time": host_t,
-            "row": [tick_ms, mode, step, rc_offline, reserved] + floats,
-        }
-
     return {
         "type": "unknown",
         "host_time": host_t,
@@ -303,14 +255,35 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "robot_motion": np.array(sink.motion_rows, dtype=float)
         if sink.motion_rows
         else np.empty((0, 5), dtype=float),
-        "solved_rc_cmd": np.array(sink.solved_rows, dtype=float)
-        if sink.solved_rows
-        else np.empty((0, 17), dtype=float),
     }
 
     mat_path = os.path.join(outdir, "usb_log.mat")
     savemat(mat_path, mat_data)
     print(f"[INFO] Saved MAT: {mat_path}")
+
+
+def list_serial_port_names() -> List[str]:
+    names = [p.device for p in list_ports.comports()]
+    names.sort()
+    return names
+
+
+def auto_pick_port() -> str:
+    ports = list_serial_port_names()
+    if not ports:
+        raise SystemExit(
+            "No serial port found. On Ubuntu, check USB cable and permission (dialout group)."
+        )
+
+    preferred_patterns = ["/dev/ttyACM", "/dev/ttyUSB", "COM"]
+    for pattern in preferred_patterns:
+        for p in ports:
+            if p.startswith(pattern):
+                print(f"[INFO] Auto selected port: {p}")
+                return p
+
+    print(f"[INFO] Auto selected port: {ports[0]}")
+    return ports[0]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -321,6 +294,7 @@ def run(args: argparse.Namespace) -> int:
     print(f"[INFO] Output dir : {args.outdir}")
 
     t0 = time.time()
+    next_flush_t = t0 + max(float(args.flush_interval), 0.0)
 
     try:
         with serial.Serial(args.port, args.baud, timeout=args.timeout) as ser:
@@ -340,8 +314,6 @@ def run(args: argparse.Namespace) -> int:
                             sink.write_imu(host_t, list(decoded["row"]))
                         elif kind == "motion":
                             sink.write_motion(host_t, list(decoded["row"]))
-                        elif kind == "solved":
-                            sink.write_solved(host_t, list(decoded["row"]))
                         else:
                             parser.stats.unknown_id += 1
                             sink.write_unknown(
@@ -351,14 +323,21 @@ def run(args: argparse.Namespace) -> int:
                                 str(decoded["frame_hex"]),
                             )
 
-                # 周期性刷新到磁盘，减少长时间采集中断电导致的数据丢失。
-                if args.flush_interval > 0 and int(time.time() - t0) % args.flush_interval == 0:
+                # 定时刷新到磁盘，避免每秒边界时高频重复 flush。
+                if args.flush_interval > 0 and time.time() >= next_flush_t:
                     sink.flush()
+                    next_flush_t += float(args.flush_interval)
 
                 if args.duration > 0 and (time.time() - t0) >= args.duration:
                     print("[INFO] Reached duration limit, stopping.")
                     break
 
+    except serial.SerialException as exc:
+        print(f"[ERROR] Serial open/read failed: {exc}")
+        if sys.platform.startswith("linux"):
+            print("[HINT] Ubuntu可能需要串口权限: sudo usermod -a -G dialout $USER")
+            print("[HINT] 重新登录后生效，或临时使用 sudo 运行。")
+        return 1
     except KeyboardInterrupt:
         print("\n[INFO] Stopped by user.")
     finally:
@@ -380,7 +359,12 @@ def run(args: argparse.Namespace) -> int:
 
 def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="USB data logger for MCU frames")
-    ap.add_argument("--port", required=True, help="Serial port, e.g. COM6")
+    ap.add_argument(
+        "--port",
+        default=None,
+        help="Serial port, e.g. /dev/ttyACM0 (Linux) or COM6 (Windows). If omitted, auto-detect.",
+    )
+    ap.add_argument("--list-ports", action="store_true", help="List local serial ports and exit")
     ap.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
     ap.add_argument("--timeout", type=float, default=0.02, help="Serial read timeout in seconds")
     ap.add_argument("--read-size", type=int, default=512, help="Bytes read each cycle")
@@ -393,4 +377,19 @@ def build_argparser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
     parser = build_argparser()
-    sys.exit(run(parser.parse_args()))
+    args = parser.parse_args()
+
+    if args.list_ports:
+        ports = list_serial_port_names()
+        if ports:
+            print("[INFO] Available serial ports:")
+            for p in ports:
+                print(f"  {p}")
+        else:
+            print("[INFO] No serial ports found.")
+        sys.exit(0)
+
+    if args.port is None:
+        args.port = auto_pick_port()
+
+    sys.exit(run(args))
