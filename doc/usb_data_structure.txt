@@ -1,0 +1,218 @@
+USB 数据结构说明（当前代码版本）
+
+说明
+- 上行：下位机 STM32 通过 USB CDC 发给上位机 PC。
+- 下行：上位机 PC 通过 USB CDC 发给下位机 STM32。
+- 相关代码位置：
+  - application/typedef/usb_typdef.h
+  - application/communication/usb_task.c
+  - application/typedef/custom_typedef.h
+  - application/other/remote_control.h
+
+一、统一帧格式
+
+当前 USB 协议使用打包结构体直接收发，按小端序传输。
+
+通用帧格式：
+1. FrameHeader_t，4 字节
+   - sof      : uint8_t，固定 0x5A
+   - len      : uint8_t，数据段长度，不包含帧头 4 字节和尾部 CRC16 2 字节
+   - id       : uint8_t，数据段 ID
+   - crc      : uint8_t，帧头 CRC8
+2. payload，len 字节
+3. crc16，2 字节
+
+整帧长度计算：
+- total_len = 4 + len + 2
+- 代码里等价写法是 sizeof(packet_struct)
+
+数据类型说明：
+- uint8_t   : 1 字节
+- uint16_t  : 2 字节
+- uint32_t  : 4 字节
+- int16_t   : 2 字节
+- float     : 4 字节，IEEE754
+- 所有结构体都使用 packed，对端解析时不要按默认对齐补字节
+
+时间戳说明：
+- time_stamp 来自 HAL_GetTick()
+- 单位为 ms
+
+二、当前 USB 上行数据（STM32 -> PC）
+
+1. IMU 数据包
+- 数据段 ID：0x02
+- 发送周期：5 ms
+- 结构体：SendDataImu_s
+- 总长度：34 字节
+- len 字段：28
+
+字段布局：
+1. frame_header
+2. time_stamp            : uint32_t
+3. data.yaw              : float，rad
+4. data.pitch            : float，rad
+5. data.roll             : float，rad
+6. data.yaw_vel          : float，rad/s
+7. data.pitch_vel        : float，rad/s
+8. data.roll_vel         : float，rad/s
+9. crc16                 : uint16_t
+
+2. 机器人运动数据包
+- 数据段 ID：0x08
+- 发送周期：10 ms
+- 结构体：SendDataRobotMotion_s
+- 总长度：22 字节
+- len 字段：16
+
+字段布局：
+1. frame_header
+2. time_stamp            : uint32_t
+3. data.speed_vector.vx  : float
+4. data.speed_vector.vy  : float
+5. data.speed_vector.wz  : float
+6. crc16                 : uint16_t
+
+备注：
+- usb_typdef.h 里这个包的注释写成了 0x09，但代码实际宏定义和发送逻辑使用的是 0x08。
+- 联调时应以 0x08 为准。
+
+3. 解算后的底盘遥控指令包
+- 数据段 ID：0x0C
+- 发送周期：10 ms
+- 结构体：SendDataSolvedRcCmd_s
+- 总长度：58 字节
+- len 字段：52
+
+字段布局：
+1. frame_header
+2. time_stamp            : uint32_t
+3. data.mode             : uint8_t
+4. data.step             : uint8_t
+5. data.rc_offline       : uint8_t
+6. data.reserved         : uint8_t
+7. data.vx               : float，m/s
+8. data.vy               : float，m/s
+9. data.wz               : float，rad/s
+10. data.roll            : float，rad
+11. data.pitch           : float，rad
+12. data.yaw             : float，rad
+13. data.leg_length_l    : float，m
+14. data.leg_length_r    : float，m
+15. data.leg_angle_l     : float，rad
+16. data.leg_angle_r     : float，rad
+17. data.tail_beta       : float，rad
+18. crc16                : uint16_t
+
+4. RobotStatus 数据包
+- 数据段 ID：0x0B
+- 结构体：SendDataRobotStatus_s
+- 已在 usb_typdef.h 中定义
+- 当前 usb_task.c 没有初始化、填充或调度发送
+- 也就是说：目前协议定义里有它，但当前程序没有实际发这个包
+
+若后续启用，其字段如下：
+1. frame_header
+2. time_stamp            : uint32_t
+3. data.robot_pos_x      : float
+4. data.robot_pos_y      : float
+5. data.robot_pos_angle  : float
+6. crc16                 : uint16_t
+
+三、当前 USB 下行数据（PC -> STM32）
+
+1. RobotCmd 控制包
+- 数据段 ID：0x01
+- 结构体：ReceiveDataRobotCmd_s
+- 总长度：38 字节
+- len 字段：32
+
+字段布局：
+1. frame_header
+2. time_stamp                  : uint32_t
+3. data.speed_vector.vx        : float
+4. data.speed_vector.vy        : float
+5. data.speed_vector.wz        : float
+6. data.chassis.roll           : float
+7. data.chassis.pitch          : float
+8. data.chassis.yaw            : float
+9. data.chassis.leg_lenth      : float
+10. crc16/checksum             : uint16_t
+
+备注：
+- 字段名在代码里写的是 leg_lenth，拼写和 leg_length 不一致。
+- 对协议联调来说它本质上就是一个 float，表示腿长。
+
+接收后的使用方式：
+- usb_task.c 会把这个包复制到 RECEIVE_ROBOT_CMD_DATA
+- 再映射到 ROBOT_CMD_DATA
+- 当 __USB_RC_SOURCE == USB_RC_SOURCE_ROBOT_CMD 时，会进一步转换成 VIRTUAL_RC_CTRL
+
+当前配置说明：
+- application/robot_param_balanced_infantry.h 中当前配置为：
+  - __USB_RC_SOURCE = USB_RC_SOURCE_ROBOT_CMD
+- 也就是说，当前工程更偏向把 0x01 这类高层底盘指令作为 USB 控制输入
+
+2. Virtual RC 虚拟遥控包
+- 数据段 ID：0x03
+- 结构体：ReceiveDataVirtualRc_s
+- 总长度：32 字节
+- len 字段：26
+
+字段布局：
+1. frame_header
+2. time_stamp                  : uint32_t
+3. data.rc.ch[0]~ch[4]         : int16_t[5]
+4. data.rc.s[0]~s[1]           : char[2]
+5. data.mouse.x                : int16_t
+6. data.mouse.y                : int16_t
+7. data.mouse.z                : int16_t
+8. data.mouse.press_l          : uint8_t
+9. data.mouse.press_r          : uint8_t
+10. data.key.v                 : uint16_t
+11. crc16                      : uint16_t
+
+RC_ctrl_t 的有效负载大小：
+- 22 字节
+
+接收后的使用方式：
+- 当 __USB_RC_SOURCE == USB_RC_SOURCE_VIRTUAL_RC 时
+- usb_task.c 会把该包直接 memcpy 到 VIRTUAL_RC_CTRL
+
+四、接收解析规则
+
+usb_task.c 当前接收处理逻辑：
+1. 在缓冲区里搜索 sof = 0x5A
+2. 校验 4 字节帧头 CRC8
+3. 读取 len 和 id
+4. 校验整帧 CRC16，长度为 4 + len + 2
+5. 按 id 分发：
+   - 0x01 -> ReceiveDataRobotCmd_s
+   - 0x03 -> ReceiveDataVirtualRc_s
+6. 读取 payload 起始处后的 time_stamp（偏移 4 字节）
+7. 若收到的时间戳大于上一次时间戳，则更新在线时间
+
+在线判定：
+- 超过 100 ms 未收到更新则认为 USB offline
+- 连续收到超过 10 次后认为 USB online
+
+五、当前实际上行/下行一览
+
+当前实际发送：
+- 0x02 IMU
+- 0x08 RobotMotion
+- 0x0C SolvedRcCmd
+
+当前仅定义未发送：
+- 0x0B RobotStatus
+
+当前实际接收：
+- 0x01 RobotCmd
+- 0x03 VirtualRc
+
+六、联调建议
+
+1. 上位机解析时统一按小端序和 packed 结构处理。
+2. 先按帧头 CRC8 和整帧 CRC16 做校验，再按 id 解包。
+3. RobotMotion 的数据段 ID 以 0x08 为准，不要按注释中的 0x09 实现。
+4. 如果上位机要兼容当前工程默认控制方式，优先发送 0x01 RobotCmd。
