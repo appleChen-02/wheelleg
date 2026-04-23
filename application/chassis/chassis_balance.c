@@ -119,7 +119,12 @@ ChassisMode_e last_mode = CHASSIS_TRIPOD;
 void ChassisPublish(void) { Publish(&CHASSIS.fdb.speed_vector, CHASSIS_FDB_SPEED_NAME); }
 static void ResetXStateOnModeSwitch(void);
 static bool IsUsbLinkReady(void);
+static float WrapToPi(float a);
+static fp32 ApplyXFeedbackPolicy(fp32 value);
+static fp32 ApplyYawFeedbackPolicy(fp32 value);
 static fp32 GetBodyXPositionError(void);
+static fp32 GetBodyXControllerInput(void);
+static fp32 GetBodyYawAngleError(void);
 static fp32 GetLegXPositionError(uint8_t leg_index);
 static fp32 GetAverageLegXPositionError(void);
 static fp32 GetLegDeltaX(uint8_t leg_index);
@@ -129,44 +134,68 @@ static bool IsUsbLinkReady(void)
     return (USB_CMD != NULL && USB_OFFLINE_FLAG != NULL && !(*USB_OFFLINE_FLAG));
 }
 
-static fp32 GetBodyXPositionError(void)
+static fp32 ApplyXFeedbackPolicy(fp32 value)
 {
 #if ENABLE_CHASSIS_X_POSITION_FEEDBACK
-    return CHASSIS.fdb.body.x - CHASSIS.ref.body.x;
+    return value;
 #else
-    return 0.0f;
+    return fp32_constrain(
+        value, -CHASSIS_X_POSITION_FEEDBACK_LIMIT, CHASSIS_X_POSITION_FEEDBACK_LIMIT);
 #endif
+}
+
+static fp32 ApplyYawFeedbackPolicy(fp32 value)
+{
+#if ENABLE_CHASSIS_X_POSITION_FEEDBACK
+    return value;
+#else
+    return fp32_constrain(
+        value, -CHASSIS_YAW_FEEDBACK_LIMIT, CHASSIS_YAW_FEEDBACK_LIMIT);
+#endif
+}
+
+static fp32 GetBodyXPositionError(void)
+{
+    return ApplyXFeedbackPolicy(CHASSIS.fdb.body.x - CHASSIS.ref.body.x);
+}
+
+static fp32 GetBodyXControllerInput(void)
+{
+    return CHASSIS_X_BALANCE_OFFSET + GetBodyXPositionError();
+}
+
+static fp32 GetBodyYawAngleError(void)
+{
+    return ApplyYawFeedbackPolicy(WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw));
+}
+
+fp32 ChassisGetBodyXRawError(void)
+{
+    return CHASSIS.fdb.body.x - CHASSIS.ref.body.x;
+}
+
+fp32 ChassisGetBodyXControlError(void)
+{
+    return GetBodyXControllerInput();
 }
 
 static fp32 GetLegXPositionError(uint8_t leg_index)
 {
-#if ENABLE_CHASSIS_X_POSITION_FEEDBACK
-    return CHASSIS.fdb.leg_state[leg_index].x - CHASSIS.ref.leg_state[leg_index].x;
-#else
-    (void)leg_index;
-    return 0.0f;
-#endif
+    return ApplyXFeedbackPolicy(CHASSIS.fdb.leg_state[leg_index].x -
+                                CHASSIS.ref.leg_state[leg_index].x);
 }
 
 static fp32 GetAverageLegXPositionError(void)
 {
-#if ENABLE_CHASSIS_X_POSITION_FEEDBACK
-    return (CHASSIS.fdb.leg_state[0].x + CHASSIS.fdb.leg_state[1].x - CHASSIS.ref.leg_state[0].x -
-            CHASSIS.ref.leg_state[1].x) /
-           2.0f;
-#else
-    return 0.0f;
-#endif
+    return ApplyXFeedbackPolicy(
+        (CHASSIS.fdb.leg_state[0].x + CHASSIS.fdb.leg_state[1].x - CHASSIS.ref.leg_state[0].x -
+         CHASSIS.ref.leg_state[1].x) /
+        2.0f);
 }
 
 static fp32 GetLegDeltaX(uint8_t leg_index)
 {
-#if ENABLE_CHASSIS_X_POSITION_FEEDBACK
-    return CHASSIS.fdb.leg_state[leg_index].Delta_x;
-#else
-    (void)leg_index;
-    return 0.0f;
-#endif
+    return ApplyXFeedbackPolicy(CHASSIS.fdb.leg_state[leg_index].Delta_x);
 }
 
 /******************************************************************/
@@ -524,12 +553,12 @@ void ChassisSetMode(void)
 #endif
 
         if (switch_is_up(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
-            new_mode = CHASSIS_NOTAIL;
-        } else if (switch_is_mid(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
-        if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_FUNCTION]))
+            if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_FUNCTION]))
                 new_mode = CHASSIS_BIPEDAL;
             else
                 new_mode = CHASSIS_TRIPOD;
+        } else if (switch_is_mid(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
+            new_mode = CHASSIS_NOTAIL;
         } else if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
             new_mode = CHASSIS_JOINED;
         }
@@ -1525,9 +1554,9 @@ static void LocomotionController_Pro_NoTail(void)
     GetK_Pro_NoTail(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, k, MPC_k, is_take_off);
     GetTheta_Pro_NoTail(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
 
-    x[0] = X0_OFFSET + GetBodyXPositionError();
+    x[0] = X0_OFFSET + GetBodyXControllerInput();
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
-    x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
+    x[2] = X2_OFFSET + GetBodyYawAngleError();
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
     x[4] =
         X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.leg_state[0].theta - theta_eq[0]);
@@ -1694,9 +1723,9 @@ static void LocomotionController_ProX_Tripod(void)
     GetT0_Pro_Tripod(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
     GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
 
-    x[0] = X0_OFFSET + GetBodyXPositionError();
+    x[0] = X0_OFFSET + GetBodyXControllerInput();
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
-    x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
+    x[2] = X2_OFFSET + GetBodyYawAngleError();
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
     x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.rod_Angle[0] - theta_eq[0]);
     x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot - 0.0f);
@@ -1846,9 +1875,9 @@ static void LocomotionController_Pro_Tripod(void)
     GetK_Pro_NoTail(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, k, MPC_k, is_take_off);
     GetTheta_Pro_NoTail(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
 
-    x[0] = X0_OFFSET + GetBodyXPositionError();
+    x[0] = X0_OFFSET + GetBodyXControllerInput();
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
-    x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
+    x[2] = X2_OFFSET + GetBodyYawAngleError();
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
     x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.leg_state[0].theta -
                         theta_eq[0]);  // - theta_eq[0]
@@ -2027,9 +2056,9 @@ static void LocomotionController_Pro_Bipedal(void)
     GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
     GetT0_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
 
-    x[0] = X0_OFFSET + GetBodyXPositionError();
+    x[0] = X0_OFFSET + GetBodyXControllerInput();
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
-    x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
+    x[2] = X2_OFFSET + GetBodyYawAngleError();
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
     x[4] =
         X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.leg_state[0].theta - theta_eq[0]);

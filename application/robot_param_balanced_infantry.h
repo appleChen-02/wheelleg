@@ -35,7 +35,9 @@
 #define CHASSIS_TAIL_POS_CHANNEL 1  // 腿长的遥控器通道号码
 #define CHASSIS_HAND_CHANNEL   0  // 夹爪遥控器通道号码（通道1，右摇杆左右）
 #define CHASSIS_RC_DEADLINE    20 // 摇杆死区
-#define ENABLE_CHASSIS_X_POSITION_FEEDBACK 0  // 1: 启用前向位移x反馈, 0: 关闭
+#define ENABLE_CHASSIS_X_POSITION_FEEDBACK 1  // 1: 启用全量x/yaw反馈, 0: 使用限幅后的x/yaw反馈
+#define CHASSIS_X_POSITION_FEEDBACK_LIMIT 0.1f  // x反馈非全量模式下的限幅上限
+#define CHASSIS_YAW_FEEDBACK_LIMIT 0.1f  // yaw角反馈非全量模式下的限幅上限
 #define CHASSIS_RC_DEADLINE    20 // 摇杆死区
 // 0-右平, 1-右竖, 2-左平, 3-左竖, 4-左滚轮
 
@@ -394,6 +396,7 @@
 
 //offest parameters ---------------------
 
+#define CHASSIS_X_BALANCE_OFFSET (-0.8f)  // 建模偏差补偿: 输入控制器的前向位移基础偏置
 #define X0_OFFSET (0.0f)   // 目标theta偏移量
 #define X1_OFFSET (0.0f)   // 目标theta_dot偏移量
 #define X2_OFFSET (0.0f)   // 目标x偏移量
