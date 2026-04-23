@@ -145,8 +145,9 @@ static fp32 board_rotate_matrix[3][3] = {__BOARD_INSTALL_SPIN_MATRIX};
   */
 void IMU_task(void const * pvParameters)
 {
-    // 发布IMU数据
-    Publish(&IMU_DATA, IMU_NAME);
+    // 初始化IMU双缓冲并发布首帧
+    ImuSnapshotInit();
+    ImuSnapshotPublish(&IMU_DATA);
 
     // clang-format off
     //wait a time
@@ -247,6 +248,9 @@ static void UpdateImuData(void)
     IMU_DATA.accel[AX_X] = gVec[AX_X];
     IMU_DATA.accel[AX_Y] = gVec[AX_Y];
     IMU_DATA.accel[AX_Z] = gVec[AX_Z];
+
+    // 每次更新后发布到数据交换中心
+    ImuSnapshotPublish(&IMU_DATA);
 }
 
 // clang-format off

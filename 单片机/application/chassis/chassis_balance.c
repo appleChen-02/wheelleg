@@ -116,8 +116,8 @@ ChassisMode_e last_mode = CHASSIS_TRIPOD;
 
 void ChassisPublish(void)
 {
-    Publish(&CHASSIS.fdb.speed_vector, CHASSIS_FDB_SPEED_NAME);
-    Publish(&CHASSIS.ref.speed_vector, CHASSIS_REF_SPEED_NAME);
+    ChassisSnapshotInit();
+    ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 static void ResetXStateOnModeSwitch(void);
 
@@ -136,7 +136,7 @@ static void ResetXStateOnModeSwitch(void);
 void ChassisInit(void)
 {
     CHASSIS.rc = get_remote_control_point();  // 获取遥控器指针
-    CHASSIS.imu = Subscribe(IMU_NAME);        // 获取IMU数据指针
+    CHASSIS.imu = NULL;                       // IMU通过数据交换双缓冲读取
     /*-------------------- 初始化状态转移矩阵 --------------------*/
     TRANSITION_MATRIX[NORMAL_STEP] = NORMAL_STEP;
     TRANSITION_MATRIX[JUMP_STEP_SQUST] = JUMP_STEP_JUMP;
@@ -341,7 +341,8 @@ void ChassisHandleException(void)
         CHASSIS.error_code &= ~DBUS_ERROR_OFFSET;
     }
 
-    if (CHASSIS.imu == NULL) {
+    // IMU双缓冲尚未就绪时，视为IMU异常
+    if (ImuSnapshotIsReady() == 0) {
         CHASSIS.error_code |= IMU_ERROR_OFFSET;
     } else {
         CHASSIS.error_code &= ~IMU_ERROR_OFFSET;
@@ -1362,6 +1363,8 @@ void ChassisReference(void)
             ClampSetTarget(clamp_target_position, 0xFF, 0xFF);
         }
     }
+
+    ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 
 /******************************************************************/

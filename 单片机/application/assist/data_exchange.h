@@ -16,36 +16,78 @@
 
 #ifndef __DATA_EXCHANGE_H
 #define __DATA_EXCHANGE_H
+
 #include "struct_typedef.h"
 #include "custom_typedef.h"
 
-typedef enum __DataExchangeIndex {
-    TEST_DATA = 0,
-    YAW_ANGLE,
-    Data_Exchange_INDEX_NUM
-} DataExchangeIndex_e;
+/**
+ * @brief 双缓冲读写状态码
+ */
+typedef enum ChassisSnapshotStatus {
+    CHASSIS_SNAPSHOT_FAIL = 0,
+    CHASSIS_SNAPSHOT_OK,
+    CHASSIS_SNAPSHOT_NOT_READY,
+    CHASSIS_SNAPSHOT_SIZE_ERROR
+} ChassisSnapshotStatus_e;
 
-typedef enum __Data_Type {
-    DE_INT8 = 0,
-    DE_UINT8,
-    DE_INT16,
-    DE_UINT16,
-    DE_INT32,
-    DE_UINT32,
-    DE_FLOAT,
-    Data_Type_NUM
-} DataType_e;
+/**
+ * @brief 初始化底盘状态/目标双缓冲
+ */
+extern void ChassisSnapshotInit(void);
 
-typedef enum DataPublishStatus {
-    PUBLISH_FAIL = 0,
-    PUBLISH_OK,
-    PUBLISH_ALREADY_EXIST,
-    PUBLISH_ALREADY_FULL
-} DataPublishStatus_e;
+/**
+ * @brief 发布一帧底盘状态与目标快照
+ * @param[in] fdb 当前状态量，类型需为 Fdb_t
+ * @param[in] ref 当前目标量，类型需为 Ref_t
+ * @retval ChassisSnapshotStatus_e
+ */
+extern uint8_t ChassisSnapshotPublish(const void * fdb, const void * ref);
 
-typedef enum DataSubscribeStatus { SUBSCRIBE_FAIL = 0, SUBSCRIBE_OK } DataSubscribeStatus_e;
+/**
+ * @brief 读取完整底盘快照
+ * @param[out] fdb_out 状态量输出缓存
+ * @param[in] fdb_size fdb_out 缓存大小，必须为 sizeof(Fdb_t)
+ * @param[out] ref_out 目标量输出缓存
+ * @param[in] ref_size ref_out 缓存大小，必须为 sizeof(Ref_t)
+ * @param[out] seq 快照序号，可传 NULL
+ * @retval ChassisSnapshotStatus_e
+ */
+extern uint8_t ChassisSnapshotRead(
+    void * fdb_out, uint32_t fdb_size, void * ref_out, uint32_t ref_size, uint32_t * seq);
 
-extern uint8_t Publish(void * address, char * name);
-extern const void * Subscribe(char * name);
+/**
+ * @brief 读取底盘反馈/目标速度向量
+ * @param[out] fdb_speed 反馈速度向量
+ * @param[out] ref_speed 目标速度向量
+ * @param[out] seq 快照序号，可传 NULL
+ * @retval ChassisSnapshotStatus_e
+ */
+extern uint8_t ChassisSnapshotReadSpeedVector(
+    ChassisSpeedVector_t * fdb_speed, ChassisSpeedVector_t * ref_speed, uint32_t * seq);
+
+/**
+ * @brief 初始化IMU双缓冲
+ */
+extern void ImuSnapshotInit(void);
+
+/**
+ * @brief 发布一帧IMU数据
+ * @param[in] imu IMU数据指针，类型为 Imu_t
+ * @retval ChassisSnapshotStatus_e
+ */
+extern uint8_t ImuSnapshotPublish(const Imu_t * imu);
+
+/**
+ * @brief 读取最新IMU数据
+ * @param[out] imu_out 输出缓存
+ * @retval ChassisSnapshotStatus_e
+ */
+extern uint8_t ImuSnapshotRead(Imu_t * imu_out);
+
+/**
+ * @brief 查询IMU双缓冲是否已就绪
+ * @retval 1-已就绪 0-未就绪
+ */
+extern uint8_t ImuSnapshotIsReady(void);
 
 #endif  // __DATA_EXCHANGE_H

@@ -3,14 +3,6 @@
 
 #include "stdbool.h"
 
-// 数据名称宏
-#define IMU_NAME "imu_data"
-#define CHASSIS_FDB_SPEED_NAME "chassis_fdb_speed"
-#define CHASSIS_REF_SPEED_NAME "chassis_ref_speed"
-#define ROBOT_CMD_DATA_NAME "ROBOT_CMD_DATA"
-#define USB_OFFLINE_NAME "usb_offline"
-#define VIRTUAL_RC_NAME "virtual_rc_ctrl"
-
 typedef struct __Imu
 {
     float angle[3];  // rad 欧拉角数据

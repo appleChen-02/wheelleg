@@ -16,75 +16,152 @@
   */
 #include "data_exchange.h"
 
-#include "clist.h"
-#include "stdlib.h"
+#include "FreeRTOS.h"
+#include "chassis_balance.h"
 #include "string.h"
-
-#define DATA_LIST_LEN 10
-#define NAME_LEN 20
+#include "task.h"
 
 typedef struct
 {
-    void * data_address;
-    uint32_t data_size;
-    char data_name[NAME_LEN];
-} Data_t;
+    Fdb_t fdb;
+    Ref_t ref;
+    uint32_t seq;
+} ChassisSnapshot_t;
 
-// static Data_t DATA_LIST[DATA_LIST_LEN] = {0};
-static List * DATA_LIST = NULL;
-static uint8_t USED_LEN = 0;  // 已经使用的数据量
+// 双缓冲槽位: front 对外可读, back 由写端更新
+static ChassisSnapshot_t CHASSIS_SNAPSHOT_BUFFER[2] = {0};
+static volatile uint8_t CHASSIS_FRONT_INDEX = 0;
+static volatile uint8_t CHASSIS_SNAPSHOT_READY = 0;
+static volatile uint32_t CHASSIS_SNAPSHOT_SEQ = 0;
 
-/**
- * @brief          发布数据
- * @param[in]      address 数据地址
- * @param[in]      name 数据名称(最大长度为19字符)
- * @retval         数据发布状态
- */
-uint8_t Publish(void * address, char * name)
+// IMU同样采用双缓冲: 写端更新 back, 读端读取 front
+static Imu_t IMU_SNAPSHOT_BUFFER[2] = {0};
+static volatile uint8_t IMU_FRONT_INDEX = 0;
+static volatile uint8_t IMU_SNAPSHOT_READY = 0;
+
+void ChassisSnapshotInit(void)
 {
-    if (DATA_LIST == NULL) {
-        DATA_LIST = ListCreate();
-    }
-
-    Node * node = ListGetHead(DATA_LIST);
-    // 遍历链表判断数据是否已经存在
-    while (node != NULL) {
-        if (strcmp(((Data_t *)node->data)->data_name, name) == 0) {
-            return PUBLISH_ALREADY_EXIST;
-        }
-        node = ListGetNodeNext(node);
-    }
-
-    // 保存数据
-    Data_t * data = (Data_t *)malloc(sizeof(Data_t));
-    memcpy(&data->data_address, &address, 4);
-    memcpy(data->data_name, name, NAME_LEN);
-    USED_LEN++;
-
-    ListPushBack(DATA_LIST, data);
-
-    return PUBLISH_OK;
+    // 上电/模式切换时重置快照状态
+    memset(CHASSIS_SNAPSHOT_BUFFER, 0, sizeof(CHASSIS_SNAPSHOT_BUFFER));
+    CHASSIS_FRONT_INDEX = 0;
+    CHASSIS_SNAPSHOT_READY = 0;
+    CHASSIS_SNAPSHOT_SEQ = 0;
 }
 
-/**
- * @brief          订阅数据
- * @param[in]      name 数据名称
- * @retval         订阅数据的地址
- */
-const void * Subscribe(char * name)
+uint8_t ChassisSnapshotPublish(const void * fdb, const void * ref)
 {
-    if (DATA_LIST == NULL) {
-        return NULL;
+    if ((fdb == NULL) || (ref == NULL)) {
+        return CHASSIS_SNAPSHOT_FAIL;
     }
 
-    // 遍历链表寻找数据
-    Node * node = ListGetHead(DATA_LIST);
-    while (node != NULL) {
-        if (strcmp(((Data_t *)node->data)->data_name, name) == 0) {
-            return ((Data_t *)node->data)->data_address;
-        }
-        node = ListGetNodeNext(node);
-    }
+    uint8_t back_index = (uint8_t)(CHASSIS_FRONT_INDEX ^ 0x01u);
+    ChassisSnapshot_t * back = &CHASSIS_SNAPSHOT_BUFFER[back_index];
 
-    return NULL;
+    // 先完整写 back 槽, 避免读端看到半更新数据
+    memcpy(&back->fdb, fdb, sizeof(Fdb_t));
+    memcpy(&back->ref, ref, sizeof(Ref_t));
+    back->seq = CHASSIS_SNAPSHOT_SEQ + 1u;
+
+    // 临界区仅用于 front 索引切换, 缩短关中断时间
+    taskENTER_CRITICAL();
+    CHASSIS_SNAPSHOT_SEQ = back->seq;
+    CHASSIS_FRONT_INDEX = back_index;
+    CHASSIS_SNAPSHOT_READY = 1;
+    taskEXIT_CRITICAL();
+
+    return CHASSIS_SNAPSHOT_OK;
 }
+
+void ImuSnapshotInit(void)
+{
+    memset(IMU_SNAPSHOT_BUFFER, 0, sizeof(IMU_SNAPSHOT_BUFFER));
+    IMU_FRONT_INDEX = 0;
+    IMU_SNAPSHOT_READY = 0;
+}
+
+uint8_t ImuSnapshotPublish(const Imu_t * imu)
+{
+    if (imu == NULL) {
+        return CHASSIS_SNAPSHOT_FAIL;
+    }
+
+    uint8_t back_index = (uint8_t)(IMU_FRONT_INDEX ^ 0x01u);
+    memcpy(&IMU_SNAPSHOT_BUFFER[back_index], imu, sizeof(Imu_t));
+
+    // IMU切换也使用短临界区, 避免front索引竞争
+    taskENTER_CRITICAL();
+    IMU_FRONT_INDEX = back_index;
+    IMU_SNAPSHOT_READY = 1;
+    taskEXIT_CRITICAL();
+
+    return CHASSIS_SNAPSHOT_OK;
+}
+
+uint8_t ImuSnapshotRead(Imu_t * imu_out)
+{
+    if (imu_out == NULL) {
+        return CHASSIS_SNAPSHOT_FAIL;
+    }
+    if (IMU_SNAPSHOT_READY == 0) {
+        return CHASSIS_SNAPSHOT_NOT_READY;
+    }
+
+    uint8_t front_index = IMU_FRONT_INDEX;
+    memcpy(imu_out, &IMU_SNAPSHOT_BUFFER[front_index], sizeof(Imu_t));
+    return CHASSIS_SNAPSHOT_OK;
+}
+
+uint8_t ImuSnapshotIsReady(void)
+{
+    return IMU_SNAPSHOT_READY;
+}
+
+uint8_t ChassisSnapshotRead(
+    void * fdb_out, uint32_t fdb_size, void * ref_out, uint32_t ref_size, uint32_t * seq)
+{
+    if ((fdb_out == NULL) || (ref_out == NULL)) {
+        return CHASSIS_SNAPSHOT_FAIL;
+    }
+    if ((fdb_size != sizeof(Fdb_t)) || (ref_size != sizeof(Ref_t))) {
+        return CHASSIS_SNAPSHOT_SIZE_ERROR;
+    }
+    if (CHASSIS_SNAPSHOT_READY == 0) {
+        return CHASSIS_SNAPSHOT_NOT_READY;
+    }
+
+    uint8_t front_index = CHASSIS_FRONT_INDEX;
+    const ChassisSnapshot_t * front = &CHASSIS_SNAPSHOT_BUFFER[front_index];
+
+    // 读端只读取 front 槽的完整快照
+    memcpy(fdb_out, &front->fdb, sizeof(Fdb_t));
+    memcpy(ref_out, &front->ref, sizeof(Ref_t));
+    if (seq != NULL) {
+        *seq = front->seq;
+    }
+
+    return CHASSIS_SNAPSHOT_OK;
+}
+
+uint8_t ChassisSnapshotReadSpeedVector(
+    ChassisSpeedVector_t * fdb_speed, ChassisSpeedVector_t * ref_speed, uint32_t * seq)
+{
+    if ((fdb_speed == NULL) || (ref_speed == NULL)) {
+        return CHASSIS_SNAPSHOT_FAIL;
+    }
+    if (CHASSIS_SNAPSHOT_READY == 0) {
+        return CHASSIS_SNAPSHOT_NOT_READY;
+    }
+
+    uint8_t front_index = CHASSIS_FRONT_INDEX;
+    const ChassisSnapshot_t * front = &CHASSIS_SNAPSHOT_BUFFER[front_index];
+
+    // 提供轻量级读取接口, 仅取速度向量
+    memcpy(fdb_speed, &front->fdb.speed_vector, sizeof(ChassisSpeedVector_t));
+    memcpy(ref_speed, &front->ref.speed_vector, sizeof(ChassisSpeedVector_t));
+    if (seq != NULL) {
+        *seq = front->seq;
+    }
+
+    return CHASSIS_SNAPSHOT_OK;
+}
+

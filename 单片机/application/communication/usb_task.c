@@ -65,12 +65,8 @@ uint32_t usb_high_water;
 // Variable Declarations
 static uint8_t USB_RX_BUF[USB_RX_DATA_SIZE];
 
-static const Imu_t * IMU;
-static const ChassisSpeedVector_t * FDB_SPEED_VECTOR;
-static const ChassisSpeedVector_t * REF_SPEED_VECTOR;
 
 // 判断USB连接状态用到的一些变量
-static bool USB_OFFLINE = true;
 static uint32_t RECEIVE_TIME = 0;
 static uint32_t LATEST_RX_TIMESTAMP = 0;
 static uint32_t CONTINUE_RECEIVE_CNT = 0;
@@ -131,10 +127,6 @@ static void GetVirtualRcCtrlData(void);
  */
 void usb_task(void const * argument)
 {
-    Publish(&ROBOT_CMD_DATA, ROBOT_CMD_DATA_NAME);
-    Publish(&USB_OFFLINE, USB_OFFLINE_NAME);
-    Publish(&VIRTUAL_RC_CTRL, VIRTUAL_RC_NAME);
-
     MX_USB_DEVICE_Init();
 
     vTaskDelay(10);  //等待USB设备初始化完成
@@ -147,11 +139,8 @@ void usb_task(void const * argument)
         GetVirtualRcCtrlData();
 
         if (HAL_GetTick() - RECEIVE_TIME > USB_OFFLINE_THRESHOLD) {
-            USB_OFFLINE = true;
             CONTINUE_RECEIVE_CNT = 0;
-        } else if (CONTINUE_RECEIVE_CNT > USB_CONNECT_CNT) {
-            USB_OFFLINE = false;
-        } else {
+        } else if (CONTINUE_RECEIVE_CNT <= USB_CONNECT_CNT) {
             CONTINUE_RECEIVE_CNT++;
         }
 
@@ -174,11 +163,6 @@ void usb_task(void const * argument)
  */
 static void UsbInit(void)
 {
-    // 订阅数据
-    IMU = Subscribe(IMU_NAME);                             // 获取IMU数据指针
-    FDB_SPEED_VECTOR = Subscribe(CHASSIS_FDB_SPEED_NAME);  // 获取底盘速度矢量指针
-    REF_SPEED_VECTOR = Subscribe(CHASSIS_REF_SPEED_NAME);  // 获取底盘目标速度矢量指针
-
     // 数据置零
     memset(&LAST_SEND_TIME, 0, sizeof(LastSendTime_t));
     memset(&RECEIVE_ROBOT_CMD_DATA, 0, sizeof(ReceiveDataRobotCmd_s));
@@ -331,19 +315,21 @@ static void UsbReceiveData(void)
  */
 static void UsbSendImuData(void)
 {
-    if (IMU == NULL) {
+    Imu_t imu_data = {0};
+    // 从IMU双缓冲读取最新完整帧
+    if (ImuSnapshotRead(&imu_data) != CHASSIS_SNAPSHOT_OK) {
         return;
     }
 
     SEND_DATA_IMU.time_stamp = HAL_GetTick();
 
-    SEND_DATA_IMU.data.yaw = IMU->angle[AX_Z];
-    SEND_DATA_IMU.data.pitch = IMU->angle[AX_Y];
-    SEND_DATA_IMU.data.roll = IMU->angle[AX_X];
+    SEND_DATA_IMU.data.yaw = imu_data.angle[AX_Z];
+    SEND_DATA_IMU.data.pitch = imu_data.angle[AX_Y];
+    SEND_DATA_IMU.data.roll = imu_data.angle[AX_X];
 
-    SEND_DATA_IMU.data.yaw_vel = IMU->gyro[AX_Z];
-    SEND_DATA_IMU.data.pitch_vel = IMU->gyro[AX_Y];
-    SEND_DATA_IMU.data.roll_vel = IMU->gyro[AX_X];
+    SEND_DATA_IMU.data.yaw_vel = imu_data.gyro[AX_Z];
+    SEND_DATA_IMU.data.pitch_vel = imu_data.gyro[AX_Y];
+    SEND_DATA_IMU.data.roll_vel = imu_data.gyro[AX_X];
 
     append_CRC16_check_sum((uint8_t *)&SEND_DATA_IMU, sizeof(SendDataImu_s));
     USB_Transmit((uint8_t *)&SEND_DATA_IMU, sizeof(SendDataImu_s));
@@ -355,15 +341,18 @@ static void UsbSendImuData(void)
  */
 static void UsbSendRobotMotionData(void)
 {
-    if (FDB_SPEED_VECTOR == NULL) {
+    ChassisSpeedVector_t fdb_speed_vector = {0};
+    ChassisSpeedVector_t ref_speed_vector = {0};
+    if (ChassisSnapshotReadSpeedVector(&fdb_speed_vector, &ref_speed_vector, NULL) !=
+        CHASSIS_SNAPSHOT_OK) {
         return;
     }
 
     SEND_ROBOT_MOTION_DATA.time_stamp = HAL_GetTick();
 
-    SEND_ROBOT_MOTION_DATA.data.speed_vector.vx = FDB_SPEED_VECTOR->vx;
-    SEND_ROBOT_MOTION_DATA.data.speed_vector.vy = FDB_SPEED_VECTOR->vy;
-    SEND_ROBOT_MOTION_DATA.data.speed_vector.wz = FDB_SPEED_VECTOR->wz;
+    SEND_ROBOT_MOTION_DATA.data.speed_vector.vx = fdb_speed_vector.vx;
+    SEND_ROBOT_MOTION_DATA.data.speed_vector.vy = fdb_speed_vector.vy;
+    SEND_ROBOT_MOTION_DATA.data.speed_vector.wz = fdb_speed_vector.wz;
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_MOTION_DATA, sizeof(SendDataRobotMotion_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_MOTION_DATA, sizeof(SendDataRobotMotion_s));
@@ -375,15 +364,18 @@ static void UsbSendRobotMotionData(void)
  */
 static void UsbSendRobotTargetData(void)
 {
-    if (REF_SPEED_VECTOR == NULL) {
+    ChassisSpeedVector_t fdb_speed_vector = {0};
+    ChassisSpeedVector_t ref_speed_vector = {0};
+    if (ChassisSnapshotReadSpeedVector(&fdb_speed_vector, &ref_speed_vector, NULL) !=
+        CHASSIS_SNAPSHOT_OK) {
         return;
     }
 
     SEND_ROBOT_TARGET_DATA.time_stamp = HAL_GetTick();
 
-    SEND_ROBOT_TARGET_DATA.data.speed_vector.vx = REF_SPEED_VECTOR->vx;
-    SEND_ROBOT_TARGET_DATA.data.speed_vector.vy = REF_SPEED_VECTOR->vy;
-    SEND_ROBOT_TARGET_DATA.data.speed_vector.wz = REF_SPEED_VECTOR->wz;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.vx = ref_speed_vector.vx;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.vy = ref_speed_vector.vy;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.wz = ref_speed_vector.wz;
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
