@@ -16,6 +16,7 @@ function log = read_usb_log(logDir, playbackSpeed)
 % Returned data:
 %   log.imu, log.robot_motion, log.robot_target, log.unknown_frames: tables
 %   log.meta: folder and source information
+%   robot_motion/robot_target now include full snapshot columns from payload <I21f>
 %
 % If usb_log.mat exists, this function also loads the MAT file and exposes it
 % in log.mat for convenience.
@@ -71,6 +72,9 @@ function log = read_usb_log(logDir, playbackSpeed)
     % 自动输出目标量与状态量关于时间的图像（vx/vy/wz）
     plot_target_state_vs_time(log);
 
+    % 如存在扩展字段，再绘制关键姿态与尾巴状态曲线
+    plot_snapshot_states_vs_time(log);
+
     % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
     animate_actual_trajectory(log, playbackSpeed);
 
@@ -112,6 +116,44 @@ function plot_target_state_vs_time(log)
     plot(log.robot_motion.host_time_s, log.robot_motion.wz, 'b-', 'LineWidth', 1.0); hold on;
     plot(log.robot_target.host_time_s, log.robot_target.wz, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('wz (rad/s)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+end
+
+function plot_snapshot_states_vs_time(log)
+    if ~isfield(log, 'robot_motion') || ~isfield(log, 'robot_target')
+        return;
+    end
+    if isempty(log.robot_motion) || isempty(log.robot_target)
+        return;
+    end
+
+    requiredMotion = {'host_time_s', 'body_pitch', 'body_yaw', 'tail_beta'};
+    requiredTarget = {'host_time_s', 'body_pitch', 'body_yaw', 'tail_beta'};
+
+    if ~all(ismember(requiredMotion, log.robot_motion.Properties.VariableNames))
+        return;
+    end
+    if ~all(ismember(requiredTarget, log.robot_target.Properties.VariableNames))
+        return;
+    end
+
+    f = figure('Name', 'Snapshot States (Pitch/Yaw/Tail)', 'Color', 'w');
+    tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, 'Robot Snapshot State vs Target');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.body_pitch, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.body_pitch, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('pitch (rad)'); legend('state', 'target', 'Location', 'best');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.body_yaw, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.body_yaw, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('yaw (rad)'); legend('state', 'target', 'Location', 'best');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.tail_beta, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.tail_beta, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('tail\_beta (rad)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
 end
 
 function plot_target_state_trajectory(log)

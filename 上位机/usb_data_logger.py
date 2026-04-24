@@ -45,6 +45,33 @@ ID_IMU = 0x02
 ID_ROBOT_MOTION = 0x08
 ID_ROBOT_TARGET = 0x0B
 
+# 机器人运动/目标快照 payload: <I21f> (tick_ms + 21 floats)
+ROBOT_SNAPSHOT_STRUCT = struct.Struct("<I21f")
+ROBOT_SNAPSHOT_COLUMNS = [
+    "tick_ms",
+    "vx",
+    "vy",
+    "wz",
+    "tail_beta",
+    "tail_beta_dot",
+    "body_roll",
+    "body_pitch",
+    "body_yaw",
+    "body_x",
+    "leg0_phi",
+    "leg0_phi_dot",
+    "leg0_legx",
+    "leg0_legx_dot",
+    "leg0_theta",
+    "leg0_theta_dot",
+    "leg1_phi",
+    "leg1_phi_dot",
+    "leg1_legx",
+    "leg1_legx_dot",
+    "leg1_theta",
+    "leg1_theta_dot",
+]
+
 CRC8_INIT = 0xFF
 # CRC8 表直接对齐下位机固件中的查表法实现，保证 Python 端和 MCU 端校验结果一致。
 CRC8_TABLE = [
@@ -132,8 +159,8 @@ class CsvSink:
         self.imu_writer.writerow(
             ["host_time_s", "tick_ms", "yaw", "pitch", "roll", "yaw_vel", "pitch_vel", "roll_vel"]
         )
-        self.motion_writer.writerow(["host_time_s", "tick_ms", "vx", "vy", "wz"])
-        self.target_writer.writerow(["host_time_s", "tick_ms", "vx", "vy", "wz"])
+        self.motion_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
+        self.target_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
@@ -239,20 +266,20 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "row": [tick_ms, yaw, pitch, roll, yaw_vel, pitch_vel, roll_vel],
         }
 
-    if pkt_id == ID_ROBOT_MOTION and len(payload) == 16:
-        tick_ms, vx, vy, wz = struct.unpack("<I3f", payload)
+    if pkt_id == ID_ROBOT_MOTION and len(payload) == ROBOT_SNAPSHOT_STRUCT.size:
+        row = list(ROBOT_SNAPSHOT_STRUCT.unpack(payload))
         return {
             "type": "motion",
             "host_time": host_t,
-            "row": [tick_ms, vx, vy, wz],
+            "row": row,
         }
 
-    if pkt_id == ID_ROBOT_TARGET and len(payload) == 16:
-        tick_ms, vx, vy, wz = struct.unpack("<I3f", payload)
+    if pkt_id == ID_ROBOT_TARGET and len(payload) == ROBOT_SNAPSHOT_STRUCT.size:
+        row = list(ROBOT_SNAPSHOT_STRUCT.unpack(payload))
         return {
             "type": "target",
             "host_time": host_t,
-            "row": [tick_ms, vx, vy, wz],
+            "row": row,
         }
 
     return {
@@ -277,10 +304,10 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "imu": np.array(sink.imu_rows, dtype=float) if sink.imu_rows else np.empty((0, 8), dtype=float),
         "robot_motion": np.array(sink.motion_rows, dtype=float)
         if sink.motion_rows
-        else np.empty((0, 5), dtype=float),
+        else np.empty((0, 23), dtype=float),
         "robot_target": np.array(sink.target_rows, dtype=float)
         if sink.target_rows
-        else np.empty((0, 5), dtype=float),
+        else np.empty((0, 23), dtype=float),
     }
 
     mat_path = os.path.join(outdir, "usb_log.mat")
