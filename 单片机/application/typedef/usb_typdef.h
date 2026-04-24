@@ -65,6 +65,30 @@ typedef struct
             float vy;
             float wz;
         } __packed__ speed_vector;
+        
+        struct
+        {
+            float beta;
+            float beta_dot;
+        } __packed__ tail_state;
+
+        struct
+        {
+            float roll;
+            float pitch;
+            float yaw;
+            float x;
+        } __packed__ body_state;
+
+        struct
+        {
+            float phi;
+            float phi_dot;
+            float legx;
+            float legx_dot;
+            float theta;
+            float theta_dot;
+        } __packed__ leg_state[2];
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataRobotMotion_s;
@@ -83,6 +107,30 @@ typedef struct
             float vy;
             float wz;
         } __packed__ speed_vector;
+        
+        struct
+        {
+            float beta;
+            float beta_dot;
+        } __packed__ tail_state;
+
+        struct
+        {
+            float roll;
+            float pitch;
+            float yaw;
+            float x;
+        } __packed__ body_state;
+
+        struct
+        {
+            float phi;
+            float phi_dot;
+            float legx;
+            float legx_dot;
+            float theta;
+            float theta_dot;
+        } __packed__ leg_state[2];
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataRobotTarget_s;

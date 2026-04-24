@@ -31,6 +31,7 @@
 #include "usbd_conf.h"
 #include "supervisory_computer_cmd.h"
 #include "IMU.h"
+#include "chassis_balance.h"
 
 #if INCLUDE_uxTaskGetStackHighWaterMark
 uint32_t usb_high_water;
@@ -78,6 +79,10 @@ static SendDataRobotMotion_s SEND_ROBOT_MOTION_DATA;
 static SendDataRobotTarget_s SEND_ROBOT_TARGET_DATA;
 
 // clang-format on
+
+// 文件级静态缓冲，避免在USB任务栈上分配大体积快照结构
+static Fdb_t USB_FDB_SNAPSHOT;
+static Ref_t USB_REF_SNAPSHOT;
 
 // 数据接收结构体
 static ReceiveDataRobotCmd_s RECEIVE_ROBOT_CMD_DATA;
@@ -341,18 +346,39 @@ static void UsbSendImuData(void)
  */
 static void UsbSendRobotMotionData(void)
 {
-    ChassisSpeedVector_t fdb_speed_vector = {0};
-    ChassisSpeedVector_t ref_speed_vector = {0};
-    if (ChassisSnapshotReadSpeedVector(&fdb_speed_vector, &ref_speed_vector, NULL) !=
+    if (ChassisSnapshotRead(
+            &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
         CHASSIS_SNAPSHOT_OK) {
         return;
     }
 
     SEND_ROBOT_MOTION_DATA.time_stamp = HAL_GetTick();
 
-    SEND_ROBOT_MOTION_DATA.data.speed_vector.vx = fdb_speed_vector.vx;
-    SEND_ROBOT_MOTION_DATA.data.speed_vector.vy = fdb_speed_vector.vy;
-    SEND_ROBOT_MOTION_DATA.data.speed_vector.wz = fdb_speed_vector.wz;
+    SEND_ROBOT_MOTION_DATA.data.speed_vector.vx = USB_FDB_SNAPSHOT.speed_vector.vx;
+    SEND_ROBOT_MOTION_DATA.data.speed_vector.vy = USB_FDB_SNAPSHOT.speed_vector.vy;
+    SEND_ROBOT_MOTION_DATA.data.speed_vector.wz = USB_FDB_SNAPSHOT.speed_vector.wz;
+
+    SEND_ROBOT_MOTION_DATA.data.tail_state.beta = USB_FDB_SNAPSHOT.tail_state.beta;
+    SEND_ROBOT_MOTION_DATA.data.tail_state.beta_dot = USB_FDB_SNAPSHOT.tail_state.beta_dot;
+
+    SEND_ROBOT_MOTION_DATA.data.body_state.roll = USB_FDB_SNAPSHOT.body.roll;
+    SEND_ROBOT_MOTION_DATA.data.body_state.pitch = USB_FDB_SNAPSHOT.body.pitch;
+    SEND_ROBOT_MOTION_DATA.data.body_state.yaw = USB_FDB_SNAPSHOT.body.yaw;
+    SEND_ROBOT_MOTION_DATA.data.body_state.x = USB_FDB_SNAPSHOT.body.x;
+
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].phi = USB_FDB_SNAPSHOT.leg_state[0].phi;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].phi_dot = USB_FDB_SNAPSHOT.leg_state[0].phi_dot;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].legx = USB_FDB_SNAPSHOT.leg_state[0].x;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].legx_dot = USB_FDB_SNAPSHOT.leg_state[0].x_dot;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].theta = USB_FDB_SNAPSHOT.leg_state[0].theta;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].theta_dot = USB_FDB_SNAPSHOT.leg_state[0].theta_dot;
+
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].phi = USB_FDB_SNAPSHOT.leg_state[1].phi;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].phi_dot = USB_FDB_SNAPSHOT.leg_state[1].phi_dot;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].legx = USB_FDB_SNAPSHOT.leg_state[1].x;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].legx_dot = USB_FDB_SNAPSHOT.leg_state[1].x_dot;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].theta = USB_FDB_SNAPSHOT.leg_state[1].theta;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].theta_dot = USB_FDB_SNAPSHOT.leg_state[1].theta_dot;
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_MOTION_DATA, sizeof(SendDataRobotMotion_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_MOTION_DATA, sizeof(SendDataRobotMotion_s));
@@ -364,18 +390,39 @@ static void UsbSendRobotMotionData(void)
  */
 static void UsbSendRobotTargetData(void)
 {
-    ChassisSpeedVector_t fdb_speed_vector = {0};
-    ChassisSpeedVector_t ref_speed_vector = {0};
-    if (ChassisSnapshotReadSpeedVector(&fdb_speed_vector, &ref_speed_vector, NULL) !=
+    if (ChassisSnapshotRead(
+            &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
         CHASSIS_SNAPSHOT_OK) {
         return;
     }
 
     SEND_ROBOT_TARGET_DATA.time_stamp = HAL_GetTick();
 
-    SEND_ROBOT_TARGET_DATA.data.speed_vector.vx = ref_speed_vector.vx;
-    SEND_ROBOT_TARGET_DATA.data.speed_vector.vy = ref_speed_vector.vy;
-    SEND_ROBOT_TARGET_DATA.data.speed_vector.wz = ref_speed_vector.wz;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.vx = USB_REF_SNAPSHOT.speed_vector.vx;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.vy = USB_REF_SNAPSHOT.speed_vector.vy;
+    SEND_ROBOT_TARGET_DATA.data.speed_vector.wz = USB_REF_SNAPSHOT.speed_vector.wz;
+
+    SEND_ROBOT_TARGET_DATA.data.tail_state.beta = USB_REF_SNAPSHOT.tail_state.beta;
+    SEND_ROBOT_TARGET_DATA.data.tail_state.beta_dot = USB_REF_SNAPSHOT.tail_state.beta_dot;
+
+    SEND_ROBOT_TARGET_DATA.data.body_state.roll = USB_REF_SNAPSHOT.body.roll;
+    SEND_ROBOT_TARGET_DATA.data.body_state.pitch = USB_REF_SNAPSHOT.body.pitch;
+    SEND_ROBOT_TARGET_DATA.data.body_state.yaw = USB_REF_SNAPSHOT.body.yaw;
+    SEND_ROBOT_TARGET_DATA.data.body_state.x = USB_REF_SNAPSHOT.body.x;
+
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].phi = USB_REF_SNAPSHOT.leg_state[0].phi;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].phi_dot = USB_REF_SNAPSHOT.leg_state[0].phi_dot;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].legx = USB_REF_SNAPSHOT.leg_state[0].x;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].legx_dot = USB_REF_SNAPSHOT.leg_state[0].x_dot;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].theta = USB_REF_SNAPSHOT.leg_state[0].theta;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].theta_dot = USB_REF_SNAPSHOT.leg_state[0].theta_dot;
+
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].phi = USB_REF_SNAPSHOT.leg_state[1].phi;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].phi_dot = USB_REF_SNAPSHOT.leg_state[1].phi_dot;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].legx = USB_REF_SNAPSHOT.leg_state[1].x;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].legx_dot = USB_REF_SNAPSHOT.leg_state[1].x_dot;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].theta = USB_REF_SNAPSHOT.leg_state[1].theta;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].theta_dot = USB_REF_SNAPSHOT.leg_state[1].theta_dot;
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
