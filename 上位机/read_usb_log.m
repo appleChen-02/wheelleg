@@ -72,8 +72,17 @@ function log = read_usb_log(logDir, playbackSpeed)
     % 自动输出目标量与状态量关于时间的图像（vx/vy/wz）
     plot_target_state_vs_time(log);
 
-    % 如存在扩展字段，再绘制关键姿态与尾巴状态曲线
-    plot_snapshot_states_vs_time(log);
+    % 姿态：roll / yaw / pitch 三图同窗
+    plot_attitude_vs_time(log);
+
+    % 左腿：腿长 / theta / phi 三图同窗
+    plot_leg_vs_time(log, 0);
+
+    % 右腿：腿长 / theta / phi 三图同窗
+    plot_leg_vs_time(log, 1);
+
+    % 尾巴：摆角 / 摆角速度 / 机体位移x 三图同窗
+    plot_tail_body_vs_time(log);
 
     % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
     animate_actual_trajectory(log, playbackSpeed);
@@ -118,7 +127,7 @@ function plot_target_state_vs_time(log)
     grid on; ylabel('wz (rad/s)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
 end
 
-function plot_snapshot_states_vs_time(log)
+function plot_attitude_vs_time(log)
     if ~isfield(log, 'robot_motion') || ~isfield(log, 'robot_target')
         return;
     end
@@ -126,8 +135,8 @@ function plot_snapshot_states_vs_time(log)
         return;
     end
 
-    requiredMotion = {'host_time_s', 'body_pitch', 'body_yaw', 'tail_beta'};
-    requiredTarget = {'host_time_s', 'body_pitch', 'body_yaw', 'tail_beta'};
+    requiredMotion = {'host_time_s', 'body_roll', 'body_yaw', 'body_pitch'};
+    requiredTarget = {'host_time_s', 'body_roll', 'body_yaw', 'body_pitch'};
 
     if ~all(ismember(requiredMotion, log.robot_motion.Properties.VariableNames))
         return;
@@ -136,14 +145,14 @@ function plot_snapshot_states_vs_time(log)
         return;
     end
 
-    f = figure('Name', 'Snapshot States (Pitch/Yaw/Tail)', 'Color', 'w');
+    f = figure('Name', 'Attitude (Roll/Yaw/Pitch)', 'Color', 'w');
     tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
-    title(tlo, 'Robot Snapshot State vs Target');
+    title(tlo, 'Robot Attitude: State vs Target');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.body_pitch, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.body_pitch, 'r--', 'LineWidth', 1.0);
-    grid on; ylabel('pitch (rad)'); legend('state', 'target', 'Location', 'best');
+    plot(log.robot_motion.host_time_s, log.robot_motion.body_roll, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.body_roll, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('roll (rad)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
     plot(log.robot_motion.host_time_s, log.robot_motion.body_yaw, 'b-', 'LineWidth', 1.0); hold on;
@@ -151,9 +160,94 @@ function plot_snapshot_states_vs_time(log)
     grid on; ylabel('yaw (rad)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.body_pitch, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.body_pitch, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('pitch (rad)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+end
+
+function plot_leg_vs_time(log, legIdx)
+    if ~isfield(log, 'robot_motion') || ~isfield(log, 'robot_target')
+        return;
+    end
+    if isempty(log.robot_motion) || isempty(log.robot_target)
+        return;
+    end
+
+    legxName = sprintf('leg%d_legx', legIdx);
+    thetaName = sprintf('leg%d_theta', legIdx);
+    phiName = sprintf('leg%d_phi', legIdx);
+
+    requiredMotion = {'host_time_s', legxName, thetaName, phiName};
+    requiredTarget = {'host_time_s', legxName, thetaName, phiName};
+
+    if ~all(ismember(requiredMotion, log.robot_motion.Properties.VariableNames))
+        return;
+    end
+    if ~all(ismember(requiredTarget, log.robot_target.Properties.VariableNames))
+        return;
+    end
+
+    legTitle = 'Left Leg';
+    if legIdx == 1
+        legTitle = 'Right Leg';
+    end
+
+    f = figure('Name', sprintf('%s (legx/theta/phi)', legTitle), 'Color', 'w');
+    tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, sprintf('%s: State vs Target', legTitle));
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.(legxName), 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.(legxName), 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('legx (m)'); legend('state', 'target', 'Location', 'best');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.(thetaName), 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.(thetaName), 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('theta (rad)'); legend('state', 'target', 'Location', 'best');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.(phiName), 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.(phiName), 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('phi (rad)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+end
+
+function plot_tail_body_vs_time(log)
+    if ~isfield(log, 'robot_motion') || ~isfield(log, 'robot_target')
+        return;
+    end
+    if isempty(log.robot_motion) || isempty(log.robot_target)
+        return;
+    end
+
+    requiredMotion = {'host_time_s', 'tail_beta', 'tail_beta_dot', 'body_x'};
+    requiredTarget = {'host_time_s', 'tail_beta', 'tail_beta_dot', 'body_x'};
+
+    if ~all(ismember(requiredMotion, log.robot_motion.Properties.VariableNames))
+        return;
+    end
+    if ~all(ismember(requiredTarget, log.robot_target.Properties.VariableNames))
+        return;
+    end
+
+    f = figure('Name', 'Tail and Body X', 'Color', 'w');
+    tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, 'Tail and Body Displacement: State vs Target');
+
+    nexttile;
     plot(log.robot_motion.host_time_s, log.robot_motion.tail_beta, 'b-', 'LineWidth', 1.0); hold on;
     plot(log.robot_target.host_time_s, log.robot_target.tail_beta, 'r--', 'LineWidth', 1.0);
-    grid on; ylabel('tail\_beta (rad)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+    grid on; ylabel('tail\_beta (rad)'); legend('state', 'target', 'Location', 'best');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.tail_beta_dot, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.tail_beta_dot, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('tail\_beta\_dot (rad/s)'); legend('state', 'target', 'Location', 'best');
+
+    nexttile;
+    plot(log.robot_motion.host_time_s, log.robot_motion.body_x, 'b-', 'LineWidth', 1.0); hold on;
+    plot(log.robot_target.host_time_s, log.robot_target.body_x, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('body\_x (m)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
 end
 
 function plot_target_state_trajectory(log)
