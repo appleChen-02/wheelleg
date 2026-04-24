@@ -44,23 +44,25 @@ extern void ChassisSnapshotInit(void);
 extern uint8_t ChassisSnapshotPublish(const void * fdb, const void * ref);
 
 /**
- * @brief 读取完整底盘快照
+ * @brief 读取完整底盘快照（同一front槽位的一致帧）
  * @param[out] fdb_out 状态量输出缓存
  * @param[in] fdb_size fdb_out 缓存大小，必须为 sizeof(Fdb_t)
  * @param[out] ref_out 目标量输出缓存
  * @param[in] ref_size ref_out 缓存大小，必须为 sizeof(Ref_t)
  * @param[out] seq 快照序号，可传 NULL
  * @retval ChassisSnapshotStatus_e
+ * @note 读期间若front槽位切换，会自动重试；超过重试次数返回CHASSIS_SNAPSHOT_FAIL
  */
 extern uint8_t ChassisSnapshotRead(
     void * fdb_out, uint32_t fdb_size, void * ref_out, uint32_t ref_size, uint32_t * seq);
 
 /**
- * @brief 读取底盘反馈/目标速度向量
+ * @brief 读取底盘反馈/目标速度向量（同一front槽位的一致帧）
  * @param[out] fdb_speed 反馈速度向量
  * @param[out] ref_speed 目标速度向量
  * @param[out] seq 快照序号，可传 NULL
  * @retval ChassisSnapshotStatus_e
+ * @note 读期间若front槽位切换，会自动重试；超过重试次数返回CHASSIS_SNAPSHOT_FAIL
  */
 extern uint8_t ChassisSnapshotReadSpeedVector(
     ChassisSpeedVector_t * fdb_speed, ChassisSpeedVector_t * ref_speed, uint32_t * seq);

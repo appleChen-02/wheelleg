@@ -209,12 +209,33 @@ static void UsbInit(void)
  */
 static void UsbSendData(void)
 {
-    // 发送Imu数据
-    CheckDurationAndSend(Imu);
-    // 发送RobotMotion数据
-    CheckDurationAndSend(RobotMotion);
-    // 发送RobotTarget数据
-    CheckDurationAndSend(RobotTarget);
+    uint32_t now = HAL_GetTick();
+    bool send_imu = ((now - LAST_SEND_TIME.Imu) >= SEND_DURATION_Imu);
+    bool send_motion = ((now - LAST_SEND_TIME.RobotMotion) >= SEND_DURATION_RobotMotion);
+    bool send_target = ((now - LAST_SEND_TIME.RobotTarget) >= SEND_DURATION_RobotTarget);
+
+    if (send_imu) {
+        LAST_SEND_TIME.Imu = now;
+        UsbSendImuData();
+    }
+
+    // 运动和目标包共用同一帧快照，避免同一轮采样时间不一致
+    if (send_motion || send_target) {
+        if (ChassisSnapshotRead(
+                &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
+            CHASSIS_SNAPSHOT_OK) {
+            return;
+        }
+    }
+
+    if (send_motion) {
+        LAST_SEND_TIME.RobotMotion = now;
+        UsbSendRobotMotionData();
+    }
+    if (send_target) {
+        LAST_SEND_TIME.RobotTarget = now;
+        UsbSendRobotTargetData();
+    }
 }
 
 /**
@@ -346,12 +367,6 @@ static void UsbSendImuData(void)
  */
 static void UsbSendRobotMotionData(void)
 {
-    if (ChassisSnapshotRead(
-            &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
-        CHASSIS_SNAPSHOT_OK) {
-        return;
-    }
-
     SEND_ROBOT_MOTION_DATA.time_stamp = HAL_GetTick();
 
     SEND_ROBOT_MOTION_DATA.data.speed_vector.vx = USB_FDB_SNAPSHOT.speed_vector.vx;
@@ -390,12 +405,6 @@ static void UsbSendRobotMotionData(void)
  */
 static void UsbSendRobotTargetData(void)
 {
-    if (ChassisSnapshotRead(
-            &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
-        CHASSIS_SNAPSHOT_OK) {
-        return;
-    }
-
     SEND_ROBOT_TARGET_DATA.time_stamp = HAL_GetTick();
 
     SEND_ROBOT_TARGET_DATA.data.speed_vector.vx = USB_REF_SNAPSHOT.speed_vector.vx;

@@ -34,6 +34,8 @@ static volatile uint8_t CHASSIS_FRONT_INDEX = 0;
 static volatile uint8_t CHASSIS_SNAPSHOT_READY = 0;
 static volatile uint32_t CHASSIS_SNAPSHOT_SEQ = 0;
 
+#define SNAPSHOT_READ_RETRY_MAX 3u
+
 
 
 // IMU同样采用双缓冲: 写端更新 back, 读端读取 front
@@ -131,17 +133,27 @@ uint8_t ChassisSnapshotRead(
         return CHASSIS_SNAPSHOT_NOT_READY;
     }
 
-    uint8_t front_index = CHASSIS_FRONT_INDEX;
-    const ChassisSnapshot_t * front = &CHASSIS_SNAPSHOT_BUFFER[front_index];
+    for (uint8_t retry = 0; retry < SNAPSHOT_READ_RETRY_MAX; retry++) {
+        uint32_t seq_before = CHASSIS_SNAPSHOT_SEQ;
+        uint8_t front_index = CHASSIS_FRONT_INDEX;
+        const ChassisSnapshot_t * front = &CHASSIS_SNAPSHOT_BUFFER[front_index];
 
-    // 读端只读取 front 槽的完整快照
-    memcpy(fdb_out, &front->fdb, sizeof(Fdb_t));
-    memcpy(ref_out, &front->ref, sizeof(Ref_t));
-    if (seq != NULL) {
-        *seq = front->seq;
+        memcpy(fdb_out, &front->fdb, sizeof(Fdb_t));
+        memcpy(ref_out, &front->ref, sizeof(Ref_t));
+        uint32_t front_seq = front->seq;
+
+        uint32_t seq_after = CHASSIS_SNAPSHOT_SEQ;
+        uint8_t front_index_after = CHASSIS_FRONT_INDEX;
+
+        if ((seq_before == seq_after) && (front_index == front_index_after)) {
+            if (seq != NULL) {
+                *seq = front_seq;
+            }
+            return CHASSIS_SNAPSHOT_OK;
+        }
     }
 
-    return CHASSIS_SNAPSHOT_OK;
+    return CHASSIS_SNAPSHOT_FAIL;
 }
 
 uint8_t ChassisSnapshotReadSpeedVector(
@@ -154,16 +166,26 @@ uint8_t ChassisSnapshotReadSpeedVector(
         return CHASSIS_SNAPSHOT_NOT_READY;
     }
 
-    uint8_t front_index = CHASSIS_FRONT_INDEX;
-    const ChassisSnapshot_t * front = &CHASSIS_SNAPSHOT_BUFFER[front_index];
+    for (uint8_t retry = 0; retry < SNAPSHOT_READ_RETRY_MAX; retry++) {
+        uint32_t seq_before = CHASSIS_SNAPSHOT_SEQ;
+        uint8_t front_index = CHASSIS_FRONT_INDEX;
+        const ChassisSnapshot_t * front = &CHASSIS_SNAPSHOT_BUFFER[front_index];
 
-    // 提供轻量级读取接口, 仅取速度向量
-    memcpy(fdb_speed, &front->fdb.speed_vector, sizeof(ChassisSpeedVector_t));
-    memcpy(ref_speed, &front->ref.speed_vector, sizeof(ChassisSpeedVector_t));
-    if (seq != NULL) {
-        *seq = front->seq;
+        memcpy(fdb_speed, &front->fdb.speed_vector, sizeof(ChassisSpeedVector_t));
+        memcpy(ref_speed, &front->ref.speed_vector, sizeof(ChassisSpeedVector_t));
+        uint32_t front_seq = front->seq;
+
+        uint32_t seq_after = CHASSIS_SNAPSHOT_SEQ;
+        uint8_t front_index_after = CHASSIS_FRONT_INDEX;
+
+        if ((seq_before == seq_after) && (front_index == front_index_after)) {
+            if (seq != NULL) {
+                *seq = front_seq;
+            }
+            return CHASSIS_SNAPSHOT_OK;
+        }
     }
 
-    return CHASSIS_SNAPSHOT_OK;
+    return CHASSIS_SNAPSHOT_FAIL;
 }
 
