@@ -792,6 +792,11 @@ static void BodyMotionObserve(void)
     CHASSIS.fdb.body.x_dot_obv = OBSERVER.body.v_kf.xhat_data[0];
     CHASSIS.fdb.body.x_acc_obv = OBSERVER.body.v_kf.xhat_data[1];
 
+    // 底盘速度向量用于对外输出和调试，统一在观测器里更新
+    CHASSIS.fdb.speed_vector.vx = CHASSIS.fdb.body.x_dot_obv;
+    CHASSIS.fdb.speed_vector.vy = 0.0f;
+    CHASSIS.fdb.speed_vector.wz = CHASSIS.fdb.body.yaw_dot;
+
     // 更新行驶距离
     if (fabs(CHASSIS.ref.speed_vector.vx) < WHEEL_DEADZONE &&
         fabs(CHASSIS.fdb.body.x_dot_obv) < 0.8f) {
