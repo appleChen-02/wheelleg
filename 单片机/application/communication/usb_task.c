@@ -383,15 +383,15 @@ static void UsbSendRobotMotionData(void)
 
     SEND_ROBOT_MOTION_DATA.data.leg_state[0].phi = USB_FDB_SNAPSHOT.leg_state[0].phi;
     SEND_ROBOT_MOTION_DATA.data.leg_state[0].phi_dot = USB_FDB_SNAPSHOT.leg_state[0].phi_dot;
-    SEND_ROBOT_MOTION_DATA.data.leg_state[0].legx = USB_FDB_SNAPSHOT.leg_state[0].x;
-    SEND_ROBOT_MOTION_DATA.data.leg_state[0].legx_dot = USB_FDB_SNAPSHOT.leg_state[0].x_dot;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].legx = USB_FDB_SNAPSHOT.leg[0].rod.L0;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[0].legx_dot = USB_FDB_SNAPSHOT.leg[0].rod.dL0;
     SEND_ROBOT_MOTION_DATA.data.leg_state[0].theta = USB_FDB_SNAPSHOT.leg_state[0].theta;
     SEND_ROBOT_MOTION_DATA.data.leg_state[0].theta_dot = USB_FDB_SNAPSHOT.leg_state[0].theta_dot;
 
     SEND_ROBOT_MOTION_DATA.data.leg_state[1].phi = USB_FDB_SNAPSHOT.leg_state[1].phi;
     SEND_ROBOT_MOTION_DATA.data.leg_state[1].phi_dot = USB_FDB_SNAPSHOT.leg_state[1].phi_dot;
-    SEND_ROBOT_MOTION_DATA.data.leg_state[1].legx = USB_FDB_SNAPSHOT.leg_state[1].x;
-    SEND_ROBOT_MOTION_DATA.data.leg_state[1].legx_dot = USB_FDB_SNAPSHOT.leg_state[1].x_dot;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].legx = USB_FDB_SNAPSHOT.leg[1].rod.L0;
+    SEND_ROBOT_MOTION_DATA.data.leg_state[1].legx_dot = USB_FDB_SNAPSHOT.leg[1].rod.dL0;
     SEND_ROBOT_MOTION_DATA.data.leg_state[1].theta = USB_FDB_SNAPSHOT.leg_state[1].theta;
     SEND_ROBOT_MOTION_DATA.data.leg_state[1].theta_dot = USB_FDB_SNAPSHOT.leg_state[1].theta_dot;
 
@@ -421,22 +421,21 @@ static void UsbSendRobotTargetData(void)
 
     SEND_ROBOT_TARGET_DATA.data.leg_state[0].phi = USB_REF_SNAPSHOT.leg_state[0].phi;
     SEND_ROBOT_TARGET_DATA.data.leg_state[0].phi_dot = USB_REF_SNAPSHOT.leg_state[0].phi_dot;
-    SEND_ROBOT_TARGET_DATA.data.leg_state[0].legx = USB_REF_SNAPSHOT.leg_state[0].x;
-    SEND_ROBOT_TARGET_DATA.data.leg_state[0].legx_dot = USB_REF_SNAPSHOT.leg_state[0].x_dot;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].legx = USB_FDB_SNAPSHOT.leg[0].rod.L0;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[0].legx_dot = USB_FDB_SNAPSHOT.leg[0].rod.dL0;
     SEND_ROBOT_TARGET_DATA.data.leg_state[0].theta = USB_REF_SNAPSHOT.leg_state[0].theta;
     SEND_ROBOT_TARGET_DATA.data.leg_state[0].theta_dot = USB_REF_SNAPSHOT.leg_state[0].theta_dot;
 
     SEND_ROBOT_TARGET_DATA.data.leg_state[1].phi = USB_REF_SNAPSHOT.leg_state[1].phi;
     SEND_ROBOT_TARGET_DATA.data.leg_state[1].phi_dot = USB_REF_SNAPSHOT.leg_state[1].phi_dot;
-    SEND_ROBOT_TARGET_DATA.data.leg_state[1].legx = USB_REF_SNAPSHOT.leg_state[1].x;
-    SEND_ROBOT_TARGET_DATA.data.leg_state[1].legx_dot = USB_REF_SNAPSHOT.leg_state[1].x_dot;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].legx = USB_FDB_SNAPSHOT.leg[1].rod.L0;
+    SEND_ROBOT_TARGET_DATA.data.leg_state[1].legx_dot = USB_FDB_SNAPSHOT.leg[1].rod.dL0;
     SEND_ROBOT_TARGET_DATA.data.leg_state[1].theta = USB_REF_SNAPSHOT.leg_state[1].theta;
     SEND_ROBOT_TARGET_DATA.data.leg_state[1].theta_dot = USB_REF_SNAPSHOT.leg_state[1].theta_dot;
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
 }
-
 /*******************************************************************************/
 /* Receive Function                                                            */
 /*******************************************************************************/
