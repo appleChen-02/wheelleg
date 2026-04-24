@@ -1633,7 +1633,7 @@ float Get_Tt0_Tripod(float l)
 }
 
 /**
- * @brief      运动控制器 尾巴离地模式Pro版——VMC
+ * @brief      运动控制器 尾巴触地模式Pro版——VMC
  */
 static void LocomotionController_ProX_Tripod(void)
 {
@@ -1652,13 +1652,16 @@ static void LocomotionController_ProX_Tripod(void)
     GetT0_Pro_Tripod(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
     GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
 
+    CHASSIS.ref.rod_Angle[0] += theta_eq[0];
+    CHASSIS.ref.rod_Angle[1] += theta_eq[1];
+
     x[0] = X0_OFFSET + (CHASSIS.fdb.body.x - CHASSIS.ref.body.x);
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
     x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
-    x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.rod_Angle[0] - theta_eq[0]);
+    x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.rod_Angle[0]);
     x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot - 0.0f);
-    x[6] = X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.rod_Angle[1] - theta_eq[1]);
+    x[6] = X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.rod_Angle[1]);
     x[7] = X7_OFFSET + (CHASSIS.fdb.leg_state[1].theta_dot - 0.0f);
     x[8] = X8_OFFSET + (CHASSIS.fdb.body.phi_dot - 0.0f);
     CalcLQR_Pro_Tripod(k, x, Tp_T);
@@ -1987,15 +1990,18 @@ static void LocomotionController_Pro_Bipedal(void)
     GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
     GetT0_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
 
+    CHASSIS.ref.leg_state[0].theta+= theta_eq[0];
+    CHASSIS.ref.leg_state[1].theta+= theta_eq[1];
+
     x[0] = X0_OFFSET + (CHASSIS.fdb.body.x - CHASSIS.ref.body.x);
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
     x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
     x[4] =
-        X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.leg_state[0].theta - theta_eq[0]);
+        X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.leg_state[0].theta);
     x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot - 0.0f);
     x[6] =
-        X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.leg_state[1].theta - theta_eq[1]);
+        X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.leg_state[1].theta);
     x[7] = X7_OFFSET + (CHASSIS.fdb.leg_state[1].theta_dot - 0.0f);
     x[8] = X8_OFFSET + (CHASSIS.fdb.body.phi - CHASSIS.ref.body.pitch);
     x[9] = X9_OFFSET + (CHASSIS.fdb.body.phi_dot - 0.0f);
