@@ -85,7 +85,7 @@ function log = read_usb_log(logDir, playbackSpeed)
     plot_tail_body_vs_time(log);
 
     % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
-    animate_actual_trajectory(log, playbackSpeed);
+    %animate_actual_trajectory(log, playbackSpeed);
 
     % 根据线速度/角速度积分得到平面轨迹，并对比目标与实际
     plot_target_state_trajectory(log);
