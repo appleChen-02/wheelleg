@@ -1,9 +1,10 @@
-function log = read_usb_log(logDir)
+function log = read_usb_log(logDir, playbackSpeed)
 %READ_USB_LOG Load USB logger CSV/MAT files into MATLAB.
 %
 % Usage:
 %   log = read_usb_log(".")
 %   log = read_usb_log("C:\\path\\to\\log")
+%   log = read_usb_log("C:\\path\\to\\log", 2.0)  % 2x playback speed
 %
 % The script expects the Python logger output files in the directory:
 %   - imu.csv
@@ -23,6 +24,10 @@ function log = read_usb_log(logDir)
         logDir = pwd;
     end
     logDir = char(logDir);
+
+    if nargin < 2 || ~isfinite(playbackSpeed) || playbackSpeed <= 0
+        playbackSpeed = 1.0;
+    end
 
     log = struct();
     log.meta = struct('folder', logDir);
@@ -65,6 +70,12 @@ function log = read_usb_log(logDir)
 
     % 自动输出目标量与状态量关于时间的图像（vx/vy/wz）
     plot_target_state_vs_time(log);
+
+    % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
+    animate_actual_trajectory(log, playbackSpeed);
+
+    % 根据线速度/角速度积分得到平面轨迹，并对比目标与实际
+    plot_target_state_trajectory(log);
 end
 
 function plot_target_state_vs_time(log)
@@ -75,7 +86,7 @@ function plot_target_state_vs_time(log)
         return;
     end
 
-    requiredVars = {'host_time_s', 'vx', 'vy', 'wz'};
+    requiredVars = {'host_time_s', 'vx', 'wz'};
     if ~all(ismember(requiredVars, log.robot_motion.Properties.VariableNames))
         return;
     end
@@ -101,4 +112,118 @@ function plot_target_state_vs_time(log)
     plot(log.robot_motion.host_time_s, log.robot_motion.wz, 'b-', 'LineWidth', 1.0); hold on;
     plot(log.robot_target.host_time_s, log.robot_target.wz, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('wz (rad/s)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+end
+
+function plot_target_state_trajectory(log)
+    if ~isfield(log, 'robot_motion') || ~isfield(log, 'robot_target')
+        return;
+    end
+    if isempty(log.robot_motion) || isempty(log.robot_target)
+        return;
+    end
+
+    requiredVars = {'host_time_s', 'vx', 'vy', 'wz'};
+    if ~all(ismember(requiredVars, log.robot_motion.Properties.VariableNames))
+        return;
+    end
+    if ~all(ismember(requiredVars, log.robot_target.Properties.VariableNames))
+        return;
+    end
+
+    [xState, yState] = integrate_body_velocity_to_xy(log.robot_motion);
+    [xTarget, yTarget] = integrate_body_velocity_to_xy(log.robot_target);
+
+    f = figure('Name', 'Target vs State Trajectory', 'Color', 'w');
+    ax = axes(f);
+    plot(ax, xState, yState, 'b-', 'LineWidth', 1.2); hold(ax, 'on');
+    plot(ax, xTarget, yTarget, 'r--', 'LineWidth', 1.2);
+    grid(ax, 'on'); axis(ax, 'equal');
+    xlabel(ax, 'x (m)');
+    ylabel(ax, 'y (m)');
+    title(ax, 'Chassis Target vs State Trajectory (Integrated from vx/wz)');
+    legend(ax, 'state', 'target', 'Location', 'best');
+end
+
+function animate_actual_trajectory(log, playbackSpeed)
+    if ~isfield(log, 'robot_motion') || isempty(log.robot_motion)
+        return;
+    end
+
+    requiredVars = {'host_time_s', 'vx', 'wz'};
+    if ~all(ismember(requiredVars, log.robot_motion.Properties.VariableNames))
+        return;
+    end
+
+    [xState, yState, tState] = integrate_body_velocity_to_xy(log.robot_motion);
+    if isempty(tState) || numel(tState) < 2
+        return;
+    end
+
+    f = figure('Name', 'Actual Motion Trajectory Playback', 'Color', 'w');
+    ax = axes(f);
+    hold(ax, 'on');
+    grid(ax, 'on');
+    axis(ax, 'equal');
+    xlabel(ax, 'x (m)');
+    ylabel(ax, 'y (m)');
+    title(ax, sprintf('Actual Motion Playback (%.2fx)', playbackSpeed));
+
+    xMin = min(xState);
+    xMax = max(xState);
+    yMin = min(yState);
+    yMax = max(yState);
+    span = max([xMax - xMin, yMax - yMin, 1e-3]);
+    margin = 0.1 * span;
+    xlim(ax, [xMin - margin, xMax + margin]);
+    ylim(ax, [yMin - margin, yMax + margin]);
+
+    trajLine = plot(ax, xState(1), yState(1), 'b-', 'LineWidth', 1.5);
+    carDot = plot(ax, xState(1), yState(1), 'ro', 'MarkerFaceColor', 'r', 'MarkerSize', 6);
+
+    for k = 2:numel(tState)
+        dt = tState(k) - tState(k - 1);
+        if ~isfinite(dt) || dt < 0
+            dt = 0;
+        end
+
+        set(trajLine, 'XData', xState(1:k), 'YData', yState(1:k));
+        set(carDot, 'XData', xState(k), 'YData', yState(k));
+        title(ax, sprintf('Actual Motion Playback (%.2fx), t = %.2f s', playbackSpeed, tState(k) - tState(1)));
+        drawnow;
+        pause(dt / playbackSpeed);
+    end
+end
+
+function [x, y, t] = integrate_body_velocity_to_xy(tbl)
+    t = double(tbl.host_time_s(:));
+    vx = double(tbl.vx(:));
+    wz = double(tbl.wz(:));
+
+    n = min([numel(t), numel(vx), numel(wz)]);
+    t = t(1:n);
+    vx = vx(1:n);
+    wz = wz(1:n);
+
+    if n == 0
+        x = [];
+        y = [];
+        t = [];
+        return;
+    end
+
+    t(~isfinite(t)) = 0;
+    vx(~isfinite(vx)) = 0;
+    wz(~isfinite(wz)) = 0;
+
+    dt = [0; diff(t)];
+    dt(dt < 0) = 0;
+
+    yaw = cumsum(wz .* dt);
+
+    % 基于地面速度模型：仅使用前向线速度 vx 和角速度 wz
+    vwx = vx .* cos(yaw);
+    vwy = vx .* sin(yaw);
+
+    x = cumsum(vwx .* dt);
+    y = cumsum(vwy .* dt);
 end
