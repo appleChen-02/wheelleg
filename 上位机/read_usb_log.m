@@ -107,24 +107,26 @@ function plot_target_state_vs_time(log)
         return;
     end
 
+    [tMotion, tTarget] = build_common_relative_time(log.robot_motion.host_time_s, log.robot_target.host_time_s);
+
     f = figure('Name', 'Target vs State Speed', 'Color', 'w');
     tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(tlo, 'Chassis Target vs State (Time Series)');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.vx, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.vx, 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.vx, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.vx, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('vx (m/s)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.vy, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.vy, 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.vy, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.vy, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('vy (m/s)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.wz, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.wz, 'r--', 'LineWidth', 1.0);
-    grid on; ylabel('wz (rad/s)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+    plot(tMotion, log.robot_motion.wz, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.wz, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('wz (rad/s)'); xlabel('time (s, t0 = 0)'); legend('state', 'target', 'Location', 'best');
 end
 
 function plot_attitude_vs_time(log)
@@ -145,24 +147,26 @@ function plot_attitude_vs_time(log)
         return;
     end
 
+    [tMotion, tTarget] = build_common_relative_time(log.robot_motion.host_time_s, log.robot_target.host_time_s);
+
     f = figure('Name', 'Attitude (Roll/Yaw/Pitch)', 'Color', 'w');
     tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(tlo, 'Robot Attitude: State vs Target');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.body_roll, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.body_roll, 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.body_roll, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.body_roll, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('roll (rad)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.body_yaw, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.body_yaw, 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.body_yaw, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.body_yaw, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('yaw (rad)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.body_pitch, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.body_pitch, 'r--', 'LineWidth', 1.0);
-    grid on; ylabel('pitch (rad)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+    plot(tMotion, log.robot_motion.body_pitch, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.body_pitch, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('pitch (rad)'); xlabel('time (s, t0 = 0)'); legend('state', 'target', 'Location', 'best');
 end
 
 function plot_leg_vs_time(log, legIdx)
@@ -187,6 +191,8 @@ function plot_leg_vs_time(log, legIdx)
         return;
     end
 
+    [tMotion, tTarget] = build_common_relative_time(log.robot_motion.host_time_s, log.robot_target.host_time_s);
+
     legTitle = 'Left Leg';
     if legIdx == 1
         legTitle = 'Right Leg';
@@ -197,19 +203,19 @@ function plot_leg_vs_time(log, legIdx)
     title(tlo, sprintf('%s: State vs Target', legTitle));
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.(legxName), 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.(legxName), 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.(legxName), 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.(legxName), 'r--', 'LineWidth', 1.0);
     grid on; ylabel('legx (m)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.(thetaName), 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.(thetaName), 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.(thetaName), 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.(thetaName), 'r--', 'LineWidth', 1.0);
     grid on; ylabel('theta (rad)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.(phiName), 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.(phiName), 'r--', 'LineWidth', 1.0);
-    grid on; ylabel('phi (rad)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+    plot(tMotion, log.robot_motion.(phiName), 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.(phiName), 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('phi (rad)'); xlabel('time (s, t0 = 0)'); legend('state', 'target', 'Location', 'best');
 end
 
 function plot_tail_body_vs_time(log)
@@ -230,24 +236,26 @@ function plot_tail_body_vs_time(log)
         return;
     end
 
+    [tMotion, tTarget] = build_common_relative_time(log.robot_motion.host_time_s, log.robot_target.host_time_s);
+
     f = figure('Name', 'Tail and Body X', 'Color', 'w');
     tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(tlo, 'Tail and Body Displacement: State vs Target');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.tail_beta, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.tail_beta, 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.tail_beta, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.tail_beta, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('tail\_beta (rad)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.tail_beta_dot, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.tail_beta_dot, 'r--', 'LineWidth', 1.0);
+    plot(tMotion, log.robot_motion.tail_beta_dot, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.tail_beta_dot, 'r--', 'LineWidth', 1.0);
     grid on; ylabel('tail\_beta\_dot (rad/s)'); legend('state', 'target', 'Location', 'best');
 
     nexttile;
-    plot(log.robot_motion.host_time_s, log.robot_motion.body_x, 'b-', 'LineWidth', 1.0); hold on;
-    plot(log.robot_target.host_time_s, log.robot_target.body_x, 'r--', 'LineWidth', 1.0);
-    grid on; ylabel('body\_x (m)'); xlabel('host\_time\_s'); legend('state', 'target', 'Location', 'best');
+    plot(tMotion, log.robot_motion.body_x, 'b-', 'LineWidth', 1.0); hold on;
+    plot(tTarget, log.robot_target.body_x, 'r--', 'LineWidth', 1.0);
+    grid on; ylabel('body\_x (m)'); xlabel('time (s, t0 = 0)'); legend('state', 'target', 'Location', 'best');
 end
 
 function plot_target_state_trajectory(log)
@@ -362,4 +370,34 @@ function [x, y, t] = integrate_body_velocity_to_xy(tbl)
 
     x = cumsum(vwx .* dt);
     y = cumsum(vwy .* dt);
+end
+
+function [tA, tB] = build_common_relative_time(timeA, timeB)
+    tA = double(timeA(:));
+    tB = double(timeB(:));
+
+    t0A = first_finite_time(tA);
+    t0B = first_finite_time(tB);
+
+    if isfinite(t0A) && isfinite(t0B)
+        t0 = min(t0A, t0B);
+    elseif isfinite(t0A)
+        t0 = t0A;
+    elseif isfinite(t0B)
+        t0 = t0B;
+    else
+        t0 = 0;
+    end
+
+    tA = tA - t0;
+    tB = tB - t0;
+end
+
+function t0 = first_finite_time(t)
+    idx = find(isfinite(t), 1, 'first');
+    if isempty(idx)
+        t0 = NaN;
+    else
+        t0 = t(idx);
+    end
 end

@@ -1369,7 +1369,7 @@ void ChassisReference(void)
         }
     }
 
-    ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
+
 }
 
 /******************************************************************/
@@ -1456,6 +1456,7 @@ void ChassisConsole(void)
     CHASSIS.wheel_motor[0].set.value = 0;
     CHASSIS.wheel_motor[1].set.value = 0;
 #endif
+    ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 
 /**
@@ -1990,18 +1991,16 @@ static void LocomotionController_Pro_Bipedal(void)
     GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
     GetT0_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
 
-    CHASSIS.ref.leg_state[0].theta+= theta_eq[0];
-    CHASSIS.ref.leg_state[1].theta+= theta_eq[1];
+    CHASSIS.ref.rod_Angle[0] += theta_eq[0];
+    CHASSIS.ref.rod_Angle[1] += theta_eq[1];
 
     x[0] = X0_OFFSET + (CHASSIS.fdb.body.x - CHASSIS.ref.body.x);
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
     x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
-    x[4] =
-        X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.leg_state[0].theta);
+    x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.rod_Angle[0]);
     x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot - 0.0f);
-    x[6] =
-        X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.leg_state[1].theta);
+    x[6] = X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.rod_Angle[1]);
     x[7] = X7_OFFSET + (CHASSIS.fdb.leg_state[1].theta_dot - 0.0f);
     x[8] = X8_OFFSET + (CHASSIS.fdb.body.phi - CHASSIS.ref.body.pitch);
     x[9] = X9_OFFSET + (CHASSIS.fdb.body.phi_dot - 0.0f);
