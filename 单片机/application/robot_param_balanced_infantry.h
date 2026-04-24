@@ -188,7 +188,7 @@
 
 #define MIN_LEG_LENGTH       ( 0.16f)
 #define MIN_LEG_ANGLE        ( - MAX_DELTA_ROD_ANGLE)
-#define MIN_TAIL_ANGLE       ( 0.0f)
+#define MIN_TAIL_ANGLE       ( -0.24f)
 #define MIN_SPEED            (-MAX_SPEED)
 #define MIN_SPEED_VECTOR_VX  (-MAX_SPEED_VECTOR_VX)
 #define MIN_SPEED_VECTOR_VY  (-MAX_SPEED_VECTOR_VY)
