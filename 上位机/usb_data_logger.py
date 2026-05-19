@@ -13,8 +13,60 @@ Features:
 - Save CSV files directly readable by MATLAB.
 - Optional MAT export on exit (requires scipy).
 
-Example:
-    python usb_data_logger.py --port /dev/ttyACM0 --baud 115200 --outdir ./log --save-mat
+实时打印说明：
+    使用 `--realtime` 开关后，脚本在每帧解码完成时会把该帧的关键字段打印到终端，便于调试和观察：
+    - IMU: 时间、tick、yaw/pitch/roll（rad）、yaw_vel/pitch_vel/roll_vel（rad/s）。
+    - MOTION: 时间、tick、vx、vy、wz、body_roll/pitch/yaw 等主要运动量。
+    - TARGET: 与 MOTION 格式相同，为目标快照。
+    使用 `--realtime-mode` 选择输出方式：
+    - append: 逐行追加输出（默认）。
+    - latest: 在终端底部维护“最新快照区”，每次只更新该区域，不清空历史输出。
+
+示例（中文）：
+    #通常使用
+    py usb_data_logger.py --port COM10 --baud 115200 --realtime --realtime-mode latest --save-mat --outdir ./log
+    # 自动选择串口并实时在终端打印解码后的帧
+    python usb_data_logger.py --realtime --baud 115200 --outdir ./log
+
+    # 更新“最新快照区”，不清空历史输出
+    python usb_data_logger.py --realtime --realtime-mode latest --baud 115200 --outdir ./log
+
+    # 指定端口（Linux 示例）
+    python usb_data_logger.py --port /dev/ttyACM0 --baud 115200 --outdir ./log
+
+    # 指定端口（Windows 示例），运行 60 秒并在退出时导出 MAT 文件
+    python usb_data_logger.py --port COM3 --baud 115200 --duration 60 --save-mat
+
+    # 列出可用串口并退出
+    python usb_data_logger.py --list-ports
+
+    # 增大每次读取缓冲并减少磁盘刷新频率
+    python usb_data_logger.py --port COM3 --baud 115200 --read-size 1024 --flush-interval 5
+
+    # 快速捕获（自动选择串口，使用默认波特率）
+    python usb_data_logger.py --outdir ./quick_log
+
+Examples (English):
+    # Auto-pick a serial port and print decoded frames to terminal in realtime
+    python usb_data_logger.py --realtime --baud 115200 --outdir ./log
+
+    # Update the latest snapshot block without clearing history
+    python usb_data_logger.py --realtime --realtime-mode latest --baud 115200 --outdir ./log
+
+    # Specify a port explicitly (Linux example)
+    python usb_data_logger.py --port /dev/ttyACM0 --baud 115200 --outdir ./log
+
+    # Specify a port explicitly (Windows example) and run for 60s, export MAT on exit
+    python usb_data_logger.py --port COM3 --baud 115200 --duration 60 --save-mat
+
+    # List available serial ports and exit
+    python usb_data_logger.py --list-ports
+
+    # Increase read buffer and reduce flush frequency
+    python usb_data_logger.py --port COM3 --baud 115200 --read-size 1024 --flush-interval 5
+
+    # Minimal quick capture (auto-port, default baud)
+    python usb_data_logger.py --outdir ./quick_log
 """
 
 from __future__ import annotations
@@ -291,6 +343,105 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
     }
 
 
+def ansi_supported() -> bool:
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+            return False
+        new_mode = mode.value | 0x0004
+        if kernel32.SetConsoleMode(handle, new_mode) == 0:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def realtime_emit_append(message: str, args: argparse.Namespace) -> None:
+    if not getattr(args, "realtime", False):
+        return
+    if getattr(args, "realtime_mode", "append") != "append":
+        return
+    print(message, flush=True)
+
+
+def format_imu_line(row: Optional[List[float]], host_t: Optional[float]) -> str:
+    if not row or host_t is None:
+        return "IMU   : <waiting>"
+    ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+    return (
+        f"IMU   : {ts} tick_ms={int(row[0])} "
+        f"yaw={row[1]:.3f} pitch={row[2]:.3f} roll={row[3]:.3f} "
+        f"yaw_vel={row[4]:.3f} pitch_vel={row[5]:.3f} roll_vel={row[6]:.3f}"
+    )
+
+
+def format_robot_line(prefix: str, row: Optional[List[float]], host_t: Optional[float]) -> str:
+    if not row or host_t is None:
+        return f"{prefix}: <waiting>"
+    ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+    parts = [f"tick_ms={int(row[0])}"]
+    for name, val in zip(ROBOT_SNAPSHOT_COLUMNS[1:], row[1:]):
+        parts.append(f"{name}={val:.3f}")
+    return f"{prefix}: {ts} " + " ".join(parts)
+
+
+class LatestSnapshotDisplay:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.enabled = bool(getattr(args, "realtime", False)) and (
+            getattr(args, "realtime_mode", "append") == "latest"
+        )
+        self.ansi_ok = ansi_supported()
+        self.lines_rendered = 0
+        self.imu_row: Optional[List[float]] = None
+        self.imu_host_t: Optional[float] = None
+        self.motion_row: Optional[List[float]] = None
+        self.motion_host_t: Optional[float] = None
+        self.target_row: Optional[List[float]] = None
+        self.target_host_t: Optional[float] = None
+
+    def update(self, kind: str, row: List[float], host_t: float) -> None:
+        if not self.enabled:
+            return
+        if kind == "imu":
+            self.imu_row = row
+            self.imu_host_t = host_t
+        elif kind == "motion":
+            self.motion_row = row
+            self.motion_host_t = host_t
+        elif kind == "target":
+            self.target_row = row
+            self.target_host_t = host_t
+        else:
+            return
+        self.render()
+
+    def render(self) -> None:
+        lines = [
+            "[LATEST] Latest snapshot (updates on new frames)",
+            format_imu_line(self.imu_row, self.imu_host_t),
+            format_robot_line("MOTION", self.motion_row, self.motion_host_t),
+            format_robot_line("TARGET", self.target_row, self.target_host_t),
+        ]
+
+        if not self.ansi_ok or self.lines_rendered == 0:
+            for line in lines:
+                print(line)
+            self.lines_rendered = len(lines)
+            return
+
+        sys.stdout.write(f"\x1b[{self.lines_rendered}F")
+        for line in lines:
+            sys.stdout.write("\x1b[2K" + line + "\n")
+        sys.stdout.flush()
+        self.lines_rendered = len(lines)
+
+
 def export_mat(outdir: str, sink: CsvSink) -> None:
     try:
         import numpy as np  # type: ignore
@@ -342,6 +493,7 @@ def auto_pick_port() -> str:
 def run(args: argparse.Namespace) -> int:
     sink = CsvSink(args.outdir)
     parser = FrameParser()
+    latest_display = LatestSnapshotDisplay(args)
 
     print(f"[INFO] Open serial: {args.port}, baud={args.baud}")
     print(f"[INFO] Output dir : {args.outdir}")
@@ -364,11 +516,39 @@ def run(args: argparse.Namespace) -> int:
                         kind = decoded["type"]
                         host_t = float(decoded["host_time"])
                         if kind == "imu":
-                            sink.write_imu(host_t, list(decoded["row"]))
+                            row = list(decoded["row"])
+                            sink.write_imu(host_t, row)
+                            if getattr(args, "realtime", False):
+                                ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+                                message = (
+                                    f"[IMU] {ts} tick={int(row[0])} "
+                                    f"yaw={row[1]:.3f} pitch={row[2]:.3f} roll={row[3]:.3f} "
+                                    f"yaw_vel={row[4]:.3f} pitch_vel={row[5]:.3f} roll_vel={row[6]:.3f}"
+                                )
+                                realtime_emit_append(message, args)
+                                latest_display.update("imu", row, host_t)
                         elif kind == "motion":
-                            sink.write_motion(host_t, list(decoded["row"]))
+                            row = list(decoded["row"])
+                            sink.write_motion(host_t, row)
+                            if getattr(args, "realtime", False):
+                                ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+                                message = (
+                                    f"[MOTION] {ts} tick={int(row[0])} vx={row[1]:.3f} vy={row[2]:.3f} wz={row[3]:.3f} "
+                                    f"roll={row[6]:.3f} pitch={row[7]:.3f} yaw={row[8]:.3f}"
+                                )
+                                realtime_emit_append(message, args)
+                                latest_display.update("motion", row, host_t)
                         elif kind == "target":
-                            sink.write_target(host_t, list(decoded["row"]))
+                            row = list(decoded["row"])
+                            sink.write_target(host_t, row)
+                            if getattr(args, "realtime", False):
+                                ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+                                message = (
+                                    f"[TARGET] {ts} tick={int(row[0])} vx={row[1]:.3f} vy={row[2]:.3f} wz={row[3]:.3f} "
+                                    f"roll={row[6]:.3f} pitch={row[7]:.3f} yaw={row[8]:.3f}"
+                                )
+                                realtime_emit_append(message, args)
+                                latest_display.update("target", row, host_t)
                         else:
                             parser.stats.unknown_id += 1
                             sink.write_unknown(
@@ -426,6 +606,17 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--outdir", default="usb_log", help="Output directory")
     ap.add_argument("--duration", type=float, default=0.0, help="Stop after N seconds, 0 means run forever")
     ap.add_argument("--flush-interval", type=int, default=1, help="CSV flush interval in seconds")
+    ap.add_argument(
+        "--realtime",
+        action="store_true",
+        help="Print decoded frames to terminal in real-time",
+    )
+    ap.add_argument(
+        "--realtime-mode",
+        choices=["append", "latest"],
+        default="append",
+        help="Realtime output mode: append (default) or latest (update snapshot block)",
+    )
     ap.add_argument("--save-mat", action="store_true", help="Export MAT file on exit (needs scipy)")
     return ap
 

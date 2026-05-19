@@ -77,7 +77,11 @@ static void imu_cmd_spi_dma(void);
 
 static void imu_rotate(fp32 gyro[3], fp32 accel[3], fp32 mag[3], bmi088_real_data_t *bmi088, ist8310_real_data_t *ist8310);
 
-static void board_rotate(fp32 gyro[3], fp32 accel[3]);
+static void board_rotate(fp32 gyro[3], fp32 accel[3], fp32 mag[3]);
+
+static fp32 wrap_pi(fp32 angle);
+
+static void imu_mag_yaw_fuse(const fp32 mag[3]);
 
 static void UpdateImuData(void);
 
@@ -161,10 +165,13 @@ void IMU_task(void const * pvParameters)
         osDelay(100);
     }
 
+    ist8310_read_mag(ist8310_real_data.mag);
+    ist8310_real_data.status |= 1 << IST8310_DATA_READY_BIT;
+
     BMI088_read(bmi088_real_data.gyro, bmi088_real_data.accel, &bmi088_real_data.temp);
     // rotate
     imu_rotate(INS_gyro, INS_accel, INS_mag, &bmi088_real_data, &ist8310_real_data);
-    board_rotate(INS_gyro, INS_accel);
+    board_rotate(INS_gyro, INS_accel, INS_mag);
 
     PID_init(&imu_temp_pid, PID_POSITION, imu_temp_PID, TEMPERATURE_PID_MAX_OUT, TEMPERATURE_PID_MAX_IOUT);
     AHRS_init(INS_quat, INS_accel, INS_mag);
@@ -186,7 +193,7 @@ void IMU_task(void const * pvParameters)
     imu_start_dma_flag = 1;
 
     gEstimateKF_Init(1, 2000);
-    IMU_QuaternionEKF_Init(10, 0.001, 1000000, 0.9996);
+    IMU_QuaternionEKF_Init(2.0f, 0.001f, 10.0f, 0.9996f);
 
     while (1)
     {
@@ -195,7 +202,6 @@ void IMU_task(void const * pvParameters)
         while (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) != pdPASS)
         {
         }
-
 
         if(gyro_update_flag & (1 << IMU_NOTIFY_SHFITS))
         {
@@ -207,7 +213,6 @@ void IMU_task(void const * pvParameters)
         {
             accel_update_flag &= ~(1 << IMU_UPDATE_SHFITS);
             BMI088_accel_read_over(accel_dma_rx_buf + BMI088_ACCEL_RX_BUF_DATA_OFFSET, bmi088_real_data.accel, &bmi088_real_data.time);
-
         }
 
         if(accel_temp_update_flag & (1 << IMU_UPDATE_SHFITS))
@@ -216,10 +221,17 @@ void IMU_task(void const * pvParameters)
             BMI088_temperature_read_over(accel_temp_dma_rx_buf + BMI088_ACCEL_RX_BUF_DATA_OFFSET, &bmi088_real_data.temp);
             imu_temp_control(bmi088_real_data.temp);
         }
+
+        if(mag_update_flag & (1 << IMU_DR_SHFITS))
+        {
+            mag_update_flag &= ~(1 << IMU_DR_SHFITS);
+            ist8310_read_mag(ist8310_real_data.mag);
+            ist8310_real_data.status |= 1 << IST8310_DATA_READY_BIT;
+        }
         
         // rotate
         imu_rotate(INS_gyro, INS_accel, INS_mag, &bmi088_real_data, &ist8310_real_data);
-        board_rotate(INS_gyro, INS_accel);
+        board_rotate(INS_gyro, INS_accel, INS_mag);
 
         // 更新加速度
         gEstimateKF_Update(INS_gyro[0],  INS_gyro[1],  INS_gyro[2],
@@ -229,6 +241,11 @@ void IMU_task(void const * pvParameters)
         IMU_QuaternionEKF_Update(INS_gyro[0], INS_gyro[1], INS_gyro[2],
                                  gVec[0], gVec[1], gVec[2],
                                  timing_time);
+
+        if(ist8310_real_data.status & (1 << IST8310_DATA_READY_BIT))
+        {
+            imu_mag_yaw_fuse(INS_mag);
+        }
         // clang-format on
 
         UpdateImuData();
@@ -275,25 +292,72 @@ static void imu_rotate(fp32 gyro[3], fp32 accel[3], fp32 mag[3], bmi088_real_dat
 }
 
 /**
- * @brief          旋转陀螺仪,加速度计,因为C板有不同安装方式
- * @param[in]      imu: 被旋转的imu值
- * @param[in]      ins: 陀螺仪数据
- * @param[out]     rotate_matrix: 旋转矩阵
+ * @brief          旋转陀螺仪,加速度计和磁力计,因为C板有不同安装方式
+ * @param[in,out]  gyro: 陀螺仪数据
+ * @param[in,out]  accel: 加速度计数据
+ * @param[in,out]  mag: 磁力计数据
  * @retval         none
  */
-static void board_rotate(fp32 gyro[3], fp32 accel[3]){
+static void board_rotate(fp32 gyro[3], fp32 accel[3], fp32 mag[3]){
     float tmp_gyro[3];
     float tmp_accel[3];
+    float tmp_mag[3];
     for (uint8_t i = 0; i < 3; i++) 
     {
         tmp_gyro[i]  = gyro[0] * board_rotate_matrix[i][0]  + gyro[1] * board_rotate_matrix[i][1]  + gyro[2] * board_rotate_matrix[i][2];
         tmp_accel[i] = accel[0] * board_rotate_matrix[i][0] + accel[1] * board_rotate_matrix[i][1] + accel[2] * board_rotate_matrix[i][2];
+        tmp_mag[i]   = mag[0] * board_rotate_matrix[i][0]   + mag[1] * board_rotate_matrix[i][1]   + mag[2] * board_rotate_matrix[i][2];
     }
     for (uint8_t i = 0; i < 3; i++)
     {
         gyro[i]  = tmp_gyro[i];
         accel[i] = tmp_accel[i];
+        mag[i]   = tmp_mag[i];
     }
+}
+
+static fp32 wrap_pi(fp32 angle)
+{
+    const fp32 pi = 3.14159265358979f;
+    const fp32 two_pi = 6.28318530717958f;
+
+    while (angle > pi)
+    {
+        angle -= two_pi;
+    }
+    while (angle < -pi)
+    {
+        angle += two_pi;
+    }
+    return angle;
+}
+
+static void imu_mag_yaw_fuse(const fp32 mag[3])
+{
+    const fp32 blend = 0.02f;
+    fp32 roll = INS.angle[AX_ROLL];
+    fp32 pitch = INS.angle[AX_PITCH];
+    fp32 mx = mag[AX_X];
+    fp32 my = mag[AX_Y];
+    fp32 mz = mag[AX_Z];
+    fp32 mag_norm_sq = mx * mx + my * my + mz * mz;
+
+    if (mag_norm_sq < 1e-6f)
+    {
+        return;
+    }
+
+    fp32 cos_roll = cosf(roll);
+    fp32 sin_roll = sinf(roll);
+    fp32 cos_pitch = cosf(pitch);
+    fp32 sin_pitch = sinf(pitch);
+
+    fp32 mag_xh = mx * cos_pitch + mz * sin_pitch;
+    fp32 mag_yh = mx * sin_roll * sin_pitch + my * cos_roll - mz * sin_roll * cos_pitch;
+    fp32 yaw_mag = atan2f(-mag_yh, mag_xh);
+
+    fp32 yaw_err = wrap_pi(yaw_mag - INS.angle[AX_YAW]);
+    INS.angle[AX_YAW] = wrap_pi(INS.angle[AX_YAW] + blend * yaw_err);
 }
 
 
