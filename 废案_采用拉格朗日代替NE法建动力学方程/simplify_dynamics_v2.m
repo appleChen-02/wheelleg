@@ -60,8 +60,7 @@ syms alpha_t r_bp_h r_bp_v real
 %% 建立原始动力学方程
 
 fprintf('Step 1: 建立原始动力学方程...\n');
-alpha_t = theta_t - theta_b + delta_t;
-%这里不应该是减号，以逆时针为正，应当是alpha_t = theta_t + theta_b + delta_t
+alpha_t = theta_t + theta_b - delta_t;
 
 r_bp_h = a_t_p*cos(theta_b) + b_t_p*sin(theta_b);
 r_bp_v = a_t_p*sin(theta_b) - b_t_p*cos(theta_b);
@@ -76,8 +75,7 @@ eq_body_rot = T_l_to_b + T_r_to_b + T_t_to_b ...
 
 % 尾巴方程 (3个)
 eq_tail_h = -F_t_to_b_h - m_t * a_t_h;
-eq_tail_v = -F_t_to_b_v - m_t * g - m_t * a_t_v;
-%这里尾巴的正方向应该写反了，应该是eq_tail_v = -F_t_to_b_v + m_t * g - m_t * a_t_v;
+eq_tail_v = -F_t_to_b_v + m_t * g - m_t * a_t_v;
 eq_tail_rot = I_t * ddtheta_t + T_t_to_b - m_t * g * l_t_c * cos(alpha_t);
 
 % 左腿方程 (3个)
@@ -126,8 +124,6 @@ eq1 = m_b*a_b_h + m_l*a_l_h + m_r*a_r_h + m_t*a_t_h + m_wl*a_wl_h + m_wr*a_wr_h 
 % 最终方程2: 机体转动
 F_t_to_b_h_expr = -m_t*a_t_h;
 F_t_to_b_v_expr = -m_t*g - m_t*a_t_v;
-%这里AI说也同样需要改动，m_t * g符号应当为正
-
 eq2 = I_b*ddtheta_b - T_l_to_b - T_r_to_b - T_t_to_b ...
     - (r_bp_h * F_t_to_b_v_expr - r_bp_v * F_t_to_b_h_expr) ...
     - m_b*g*l_b*sin(theta_b + theta_b0);
