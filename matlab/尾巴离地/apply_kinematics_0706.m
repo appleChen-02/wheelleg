@@ -29,9 +29,9 @@ syms g real                                    % 重力加速度
 syms R R_w real                                % 轮半径, 半轮距
 syms m_b m_l m_r m_wl m_wr real               % 质量
 syms I_b I_l I_r I_wl I_wr I_yaw real         % 转动惯量
-syms l_b l_l l_r l_l_d l_r_d real             % 长度参数
+syms l_body_com l_l l_r l_leg_l_com l_leg_r_com real  % 长度参数
 syms theta_l0 theta_r0 theta_b0 real          % 初始角偏置
-syms m_t I_t a_t_p b_t_p l_t_c delta_t real
+syms m_t I_t l_tail_mount_h l_tail_mount_v l_tail_com delta_t real
 
 % ========== 控制输入 (推导 §1.4) ==========
 syms T_wr_to_r T_wl_to_l T_r_to_b T_l_to_b real
@@ -102,20 +102,20 @@ a_b_h_expr = (a_r_h_expr + a_l_h_expr) / 2;
 a_b_v_expr = (a_r_v_expr + a_l_v_expr) / 2;
 
 a_tp_h_expr = a_b_h_expr ...
-            - (a_t_p*sin(theta_b) - b_t_p*cos(theta_b)) * ddtheta_b ...
-            - (a_t_p*cos(theta_b) + b_t_p*sin(theta_b)) * dtheta_b^2;
+            - (l_tail_mount_h*sin(theta_b) - l_tail_mount_v*cos(theta_b)) * ddtheta_b ...
+            - (l_tail_mount_h*cos(theta_b) + l_tail_mount_v*sin(theta_b)) * dtheta_b^2;
 a_tp_v_expr = a_b_v_expr ...
-            + (a_t_p*cos(theta_b) + b_t_p*sin(theta_b)) * ddtheta_b ...
-            - (a_t_p*sin(theta_b) - b_t_p*cos(theta_b)) * dtheta_b^2;
+            + (l_tail_mount_h*cos(theta_b) + l_tail_mount_v*sin(theta_b)) * ddtheta_b ...
+            - (l_tail_mount_h*sin(theta_b) - l_tail_mount_v*cos(theta_b)) * dtheta_b^2;
 
-alpha_t_expr = theta_t - theta_b + delta_t;
+alpha_t_expr = theta_t + theta_b - delta_t;  % d(alpha_t)/dt = dtheta_t + dtheta_b
 
 a_t_h_expr = a_tp_h_expr ...
-           - l_t_c * ( (ddtheta_t - ddtheta_b) * sin(alpha_t_expr) ...
-                     + (dtheta_t - dtheta_b)^2 * cos(alpha_t_expr) );
+           - l_tail_com * ( (ddtheta_t + ddtheta_b) * sin(alpha_t_expr) ...
+                          + (dtheta_t + dtheta_b)^2 * cos(alpha_t_expr) );
 a_t_v_expr = a_tp_v_expr ...
-           - l_t_c * ( (ddtheta_t - ddtheta_b) * cos(alpha_t_expr) ...
-                     - (dtheta_t - dtheta_b)^2 * sin(alpha_t_expr) );
+           + l_tail_com * ( (ddtheta_t + ddtheta_b) * cos(alpha_t_expr) ...
+                          - (dtheta_t + dtheta_b)^2 * sin(alpha_t_expr) );
 
 % ----- Yaw角加速度 -----
 fprintf('【Yaw角加速度】\n');
@@ -213,7 +213,7 @@ kinematics_subs = {
     a_tp_v, a_tp_v_expr;
 
     % 尾巴相对质心方向角
-    alpha_t, theta_t - theta_b + delta_t;
+    alpha_t, theta_t + theta_b - delta_t;
 
     % 尾巴质心加速度
     a_t_h, a_t_h_expr;
