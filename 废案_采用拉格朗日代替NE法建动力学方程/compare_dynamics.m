@@ -331,6 +331,7 @@ g_NE_sym = sym(zeros(n_q, 1));
 for i = 1:n_q
     g_NE_sym(i) = eqs_NE{i} - M_NE_sym(i,:) * ddq - B_raw_NE(i,:) * u;
 end
+g_NE_sym = -g_NE_sym;   % NE法g向量取反，与拉格朗日法g的定义对齐
 
 % 使用NE中间变量名(T_l_to_b等)的M/g/B需要统一为新名
 % 注: NE中间变量 T_l_to_b, T_wl_to_l 等在消去内力后可能残留在方程中

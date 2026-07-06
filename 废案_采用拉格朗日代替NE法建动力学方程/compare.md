@@ -36,3 +36,5 @@ for i = 1:6
     g_sym(i) = -(eqs{i} - M_sym(i,:)*ddq - B_raw(i,:)*u);
 end
 
+已修改最新的compare代码
+
