@@ -1,4 +1,2 @@
-上位机/log/imu.csv
-上位机/log/robot_motion.csv
-上位机/log/robot_target.csv
-上位机/log/unknown_frames.csv
+*.csv
+*.mat
