@@ -11,6 +11,7 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 %   - imu.csv
 %   - robot_motion.csv
 %   - robot_target.csv
+%   - torque.csv
 %   - unknown_frames.csv
 %   - usb_log.mat (optional, if exported)
 %
@@ -47,6 +48,7 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
     imuFile = fullfile(logDir, 'imu.csv');
     motionFile = fullfile(logDir, 'robot_motion.csv');
     targetFile = fullfile(logDir, 'robot_target.csv');
+    torqueFile = fullfile(logDir, 'torque.csv');
     unknownFile = fullfile(logDir, 'unknown_frames.csv');
     matFile = fullfile(logDir, 'usb_log.mat');
 
@@ -66,6 +68,12 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
         log.robot_target = readtable(targetFile, 'VariableNamingRule', 'preserve');
     else
         log.robot_target = table();
+    end
+
+    if isfile(torqueFile)
+        log.torque = readtable(torqueFile, 'VariableNamingRule', 'preserve');
+    else
+        log.torque = table();
     end
 
     if isfile(unknownFile)
@@ -101,6 +109,9 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 
     % 尾巴：摆角 / 摆角速度 / 机体位移x 三图同窗
     plot_tail_body_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
+
+    % 控制力矩：右髋/左髋/右轮/左轮/尾巴 五图同窗
+    plot_torque_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
 
     % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
     %animate_actual_trajectory(log, playbackSpeed, axisLabelFontSize, tickFontSize);
@@ -274,6 +285,42 @@ function plot_tail_body_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCo
     plot(tMotion, log.robot_motion.body_x, 'b-', 'LineWidth', 1.0); hold on;
     plot(tTarget, log.robot_target.body_x, 'r--', 'LineWidth', 1.0);
     grid on; style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true); ylabel('body\_x (m)', 'FontSize', axisLabelFontSize); xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize); legend('state', 'target', 'Location', 'best');
+end
+
+function plot_torque_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
+    if ~isfield(log, 'torque') || isempty(log.torque)
+        return;
+    end
+
+    requiredVars = {'host_time_s', 'T_r_to_b', 'T_l_to_b', 'T_wr_to_r', 'T_wl_to_l', 'T_t_to_b'};
+    if ~all(ismember(requiredVars, log.torque.Properties.VariableNames))
+        return;
+    end
+
+    tTorque = double(log.torque.host_time_s(:));
+    t0 = first_finite_time(tTorque);
+    if ~isfinite(t0)
+        t0 = 0;
+    end
+    tTorque = tTorque - t0;
+
+    f = create_plot_figure('Control Torques', figurePosition, baseTickCount);
+    tlo = tiledlayout(f, 5, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, 'Control Torques (K[0]..K[4])');
+
+    torqueNames = {'T_r_to_b (right hip)', 'T_l_to_b (left hip)', 'T_wr_to_r (right wheel)', 'T_wl_to_l (left wheel)', 'T_t_to_b (tail)'};
+    torqueFields = {'T_r_to_b', 'T_l_to_b', 'T_wr_to_r', 'T_wl_to_l', 'T_t_to_b'};
+
+    for i = 1:5
+        ax = nexttile;
+        plot(tTorque, log.torque.(torqueFields{i}), 'b-', 'LineWidth', 1.0);
+        grid on;
+        style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true);
+        ylabel(sprintf('%s (N*m)', torqueNames{i}), 'FontSize', axisLabelFontSize);
+        if i == 5
+            xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize);
+        end
+    end
 end
 
 function plot_target_state_trajectory(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
@@ -565,7 +612,7 @@ end
 
 function timeOrigin = get_log_time_origin(log)
     timeOrigin = NaN;
-    candidateFields = {'robot_motion', 'robot_target', 'imu', 'unknown_frames'};
+    candidateFields = {'robot_motion', 'robot_target', 'imu', 'torque', 'unknown_frames'};
     for idx = 1:numel(candidateFields)
         fieldName = candidateFields{idx};
         if isfield(log, fieldName)
@@ -589,7 +636,7 @@ function timeOrigin = get_log_time_origin(log)
 end
 
 function log = apply_time_range_filter(log, timeRange, timeOrigin)
-    filterFields = {'imu', 'robot_motion', 'robot_target', 'unknown_frames'};
+    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'unknown_frames'};
     for idx = 1:numel(filterFields)
         fieldName = filterFields{idx};
         if ~isfield(log, fieldName)

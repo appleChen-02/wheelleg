@@ -48,6 +48,7 @@ uint32_t usb_high_water;
 #define SEND_DURATION_RobotStateInfo   10  // ms
 #define SEND_DURATION_RobotMotion 10  // ms
 #define SEND_DURATION_RobotTarget 10  // ms
+#define SEND_DURATION_Torque      10  // ms
 
 // clang-format on
 
@@ -77,6 +78,7 @@ static uint32_t CONTINUE_RECEIVE_CNT = 0;
 static SendDataImu_s         SEND_DATA_IMU;
 static SendDataRobotMotion_s SEND_ROBOT_MOTION_DATA;
 static SendDataRobotTarget_s SEND_ROBOT_TARGET_DATA;
+static SendDataTorque_s     SEND_TORQUE_DATA;
 
 // clang-format on
 
@@ -98,6 +100,7 @@ typedef struct
     uint32_t Imu;
     uint32_t RobotMotion;
     uint32_t RobotTarget;
+    uint32_t Torque;
 } LastSendTime_t;
 static LastSendTime_t LAST_SEND_TIME;
 
@@ -114,6 +117,7 @@ static void UsbInit(void);
 static void UsbSendImuData(void);
 static void UsbSendRobotMotionData(void);
 static void UsbSendRobotTargetData(void);
+static void UsbSendTorqueData(void);
 
 /*******************************************************************************/
 /* Receive Function                                                            */
@@ -200,7 +204,15 @@ static void UsbInit(void)
     append_CRC8_check_sum(  // 添加帧头 CRC8 校验位
         (uint8_t *)(&SEND_ROBOT_TARGET_DATA.frame_header),
         sizeof(SEND_ROBOT_TARGET_DATA.frame_header));
-}   
+
+    // 12.初始化控制力矩数据包
+    SEND_TORQUE_DATA.frame_header.sof = SEND_SOF;
+    SEND_TORQUE_DATA.frame_header.len = (uint8_t)(sizeof(SendDataTorque_s) - 6);
+    SEND_TORQUE_DATA.frame_header.id = TORQUE_DATA_SEND_ID;
+    append_CRC8_check_sum(  // 添加帧头 CRC8 校验位
+        (uint8_t *)(&SEND_TORQUE_DATA.frame_header),
+        sizeof(SEND_TORQUE_DATA.frame_header));
+}
 
 /**
  * @brief      用USB发送数据
@@ -213,14 +225,15 @@ static void UsbSendData(void)
     bool send_imu = ((now - LAST_SEND_TIME.Imu) >= SEND_DURATION_Imu);
     bool send_motion = ((now - LAST_SEND_TIME.RobotMotion) >= SEND_DURATION_RobotMotion);
     bool send_target = ((now - LAST_SEND_TIME.RobotTarget) >= SEND_DURATION_RobotTarget);
+    bool send_torque = ((now - LAST_SEND_TIME.Torque) >= SEND_DURATION_Torque);
 
     if (send_imu) {
         LAST_SEND_TIME.Imu = now;
         UsbSendImuData();
     }
 
-    // 运动和目标包共用同一帧快照，避免同一轮采样时间不一致
-    if (send_motion || send_target) {
+    // 运动、目标和力矩包共用同一帧快照，避免同一轮采样时间不一致
+    if (send_motion || send_target || send_torque) {
         if (ChassisSnapshotRead(
                 &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
             CHASSIS_SNAPSHOT_OK) {
@@ -235,6 +248,10 @@ static void UsbSendData(void)
     if (send_target) {
         LAST_SEND_TIME.RobotTarget = now;
         UsbSendRobotTargetData();
+    }
+    if (send_torque) {
+        LAST_SEND_TIME.Torque = now;
+        UsbSendTorqueData();
     }
 }
 
@@ -435,6 +452,28 @@ static void UsbSendRobotTargetData(void)
 
     append_CRC16_check_sum((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
     USB_Transmit((uint8_t *)&SEND_ROBOT_TARGET_DATA, sizeof(SendDataRobotTarget_s));
+}
+
+/**
+ * @brief 发送控制力矩数据
+ */
+static void UsbSendTorqueData(void)
+{
+    SEND_TORQUE_DATA.time_stamp = HAL_GetTick();
+
+    // K[0] → T_r_to_b (右髋力矩)
+    SEND_TORQUE_DATA.data.T_r_to_b = USB_FDB_SNAPSHOT.torque[0];
+    // K[1] → T_l_to_b (左髋力矩)
+    SEND_TORQUE_DATA.data.T_l_to_b = USB_FDB_SNAPSHOT.torque[1];
+    // K[2] → T_wr_to_r (右轮力矩)
+    SEND_TORQUE_DATA.data.T_wr_to_r = USB_FDB_SNAPSHOT.torque[2];
+    // K[3] → T_wl_to_l (左轮力矩)
+    SEND_TORQUE_DATA.data.T_wl_to_l = USB_FDB_SNAPSHOT.torque[3];
+    // K[4] → T_t_to_b (尾电机力矩)
+    SEND_TORQUE_DATA.data.T_t_to_b = USB_FDB_SNAPSHOT.torque[4];
+
+    append_CRC16_check_sum((uint8_t *)&SEND_TORQUE_DATA, sizeof(SendDataTorque_s));
+    USB_Transmit((uint8_t *)&SEND_TORQUE_DATA, sizeof(SendDataTorque_s));
 }
 /*******************************************************************************/
 /* Receive Function                                                            */

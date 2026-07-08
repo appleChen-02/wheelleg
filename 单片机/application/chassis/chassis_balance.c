@@ -779,8 +779,8 @@ static void UpdateStepStatus(void)  //感觉只是跳
  */
 static void BodyMotionObserve(void)
 {
-    // clang-format off
-    float speed = WHEEL_RADIUS * (CHASSIS.fdb.leg[0].wheel.Velocity + CHASSIS.fdb.leg[1].wheel.Velocity) / 2;
+    // clang-format off 
+    float speed = (WHEEL_RADIUS * CHASSIS.fdb.leg[0].wheel.Velocity + cosf(CHASSIS.fdb.leg[0].rod.Theta) * CHASSIS.fdb.leg[0].rod.L0 * CHASSIS.fdb.leg[0].rod.dTheta + WHEEL_RADIUS * CHASSIS.fdb.leg[1].wheel.Velocity + cosf(CHASSIS.fdb.leg[1].rod.Theta) * CHASSIS.fdb.leg[1].rod.L0 * CHASSIS.fdb.leg[1].rod.dTheta) / 2;
     // clang-format on
 
     // 使用kf同时估计加速度和速度,滤波更新
@@ -1456,6 +1456,12 @@ void ChassisConsole(void)
     CHASSIS.wheel_motor[0].set.value = 0;
     CHASSIS.wheel_motor[1].set.value = 0;
 #endif
+    // 将控制力矩写入快照，供上位机监控 [0]=T_r_to_b, [1]=T_l_to_b, [2]=T_wr_to_r, [3]=T_wl_to_l, [4]=T_t_to_b
+    CHASSIS.fdb.torque[0] = CHASSIS.cmd.leg[1].rod.Tp;    // K[0] 右髋力矩
+    CHASSIS.fdb.torque[1] = CHASSIS.cmd.leg[0].rod.Tp;    // K[1] 左髋力矩
+    CHASSIS.fdb.torque[2] = CHASSIS.cmd.leg[1].wheel.T;   // K[2] 右轮力矩
+    CHASSIS.fdb.torque[3] = CHASSIS.cmd.leg[0].wheel.T;   // K[3] 左轮力矩
+    CHASSIS.fdb.torque[4] = CHASSIS.cmd.tail.Tt;           // K[4] 尾电机力矩
     ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 

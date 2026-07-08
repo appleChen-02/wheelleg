@@ -96,6 +96,7 @@ SOF = 0x5A
 ID_IMU = 0x02
 ID_ROBOT_MOTION = 0x08
 ID_ROBOT_TARGET = 0x0B
+ID_TORQUE = 0x0C
 
 # 机器人运动/目标快照 payload: <I21f> (tick_ms + 21 floats)
 ROBOT_SNAPSHOT_STRUCT = struct.Struct("<I21f")
@@ -122,6 +123,17 @@ ROBOT_SNAPSHOT_COLUMNS = [
     "leg1_legx_dot",
     "leg1_theta",
     "leg1_theta_dot",
+]
+
+# 控制力矩 payload: <I5f> (tick_ms + 5 floats)
+TORQUE_STRUCT = struct.Struct("<I5f")
+TORQUE_COLUMNS = [
+    "tick_ms",
+    "T_r_to_b",
+    "T_l_to_b",
+    "T_wr_to_r",
+    "T_wl_to_l",
+    "T_t_to_b",
 ]
 
 CRC8_INIT = 0xFF
@@ -199,6 +211,9 @@ class CsvSink:
         self.target_file = open(
             os.path.join(outdir, "robot_target.csv"), "w", newline="", encoding="utf-8"
         )
+        self.torque_file = open(
+            os.path.join(outdir, "torque.csv"), "w", newline="", encoding="utf-8"
+        )
         self.unknown_file = open(
             os.path.join(outdir, "unknown_frames.csv"), "w", newline="", encoding="utf-8"
         )
@@ -206,6 +221,7 @@ class CsvSink:
         self.imu_writer = csv.writer(self.imu_file)
         self.motion_writer = csv.writer(self.motion_file)
         self.target_writer = csv.writer(self.target_file)
+        self.torque_writer = csv.writer(self.torque_file)
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
@@ -213,11 +229,13 @@ class CsvSink:
         )
         self.motion_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
         self.target_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
+        self.torque_writer.writerow(["host_time_s"] + TORQUE_COLUMNS)
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
         self.motion_rows: List[List[float]] = []
         self.target_rows: List[List[float]] = []
+        self.torque_rows: List[List[float]] = []
 
     def write_imu(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
@@ -234,6 +252,11 @@ class CsvSink:
         self.target_writer.writerow(line)
         self.target_rows.append(line)
 
+    def write_torque(self, host_t: float, row: List[float]) -> None:
+        line = [host_t] + row
+        self.torque_writer.writerow(line)
+        self.torque_rows.append(line)
+
     def write_unknown(self, host_t: float, pkt_id: int, payload_len: int, frame_hex: str) -> None:
         self.unknown_writer.writerow([host_t, f"0x{pkt_id:02X}", payload_len, frame_hex])
 
@@ -241,6 +264,7 @@ class CsvSink:
         self.imu_file.flush()
         self.motion_file.flush()
         self.target_file.flush()
+        self.torque_file.flush()
         self.unknown_file.flush()
 
     def close(self) -> None:
@@ -248,6 +272,7 @@ class CsvSink:
         self.imu_file.close()
         self.motion_file.close()
         self.target_file.close()
+        self.torque_file.close()
         self.unknown_file.close()
 
 
@@ -334,6 +359,14 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "row": row,
         }
 
+    if pkt_id == ID_TORQUE and len(payload) == TORQUE_STRUCT.size:
+        row = list(TORQUE_STRUCT.unpack(payload))
+        return {
+            "type": "torque",
+            "host_time": host_t,
+            "row": row,
+        }
+
     return {
         "type": "unknown",
         "host_time": host_t,
@@ -391,6 +424,18 @@ def format_robot_line(prefix: str, row: Optional[List[float]], host_t: Optional[
     return f"{prefix}: {ts} " + " ".join(parts)
 
 
+def format_torque_line(row: Optional[List[float]], host_t: Optional[float]) -> str:
+    if not row or host_t is None:
+        return "TORQUE: <waiting>"
+    ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+    return (
+        f"TORQUE: {ts} tick_ms={int(row[0])} "
+        f"Tr_to_b={row[1]:.3f} Tl_to_b={row[2]:.3f} "
+        f"Twr_to_r={row[3]:.3f} Twl_to_l={row[4]:.3f} "
+        f"Tt_to_b={row[5]:.3f}"
+    )
+
+
 class LatestSnapshotDisplay:
     def __init__(self, args: argparse.Namespace) -> None:
         self.enabled = bool(getattr(args, "realtime", False)) and (
@@ -404,6 +449,8 @@ class LatestSnapshotDisplay:
         self.motion_host_t: Optional[float] = None
         self.target_row: Optional[List[float]] = None
         self.target_host_t: Optional[float] = None
+        self.torque_row: Optional[List[float]] = None
+        self.torque_host_t: Optional[float] = None
 
     def update(self, kind: str, row: List[float], host_t: float) -> None:
         if not self.enabled:
@@ -417,6 +464,9 @@ class LatestSnapshotDisplay:
         elif kind == "target":
             self.target_row = row
             self.target_host_t = host_t
+        elif kind == "torque":
+            self.torque_row = row
+            self.torque_host_t = host_t
         else:
             return
         self.render()
@@ -427,6 +477,7 @@ class LatestSnapshotDisplay:
             format_imu_line(self.imu_row, self.imu_host_t),
             format_robot_line("MOTION", self.motion_row, self.motion_host_t),
             format_robot_line("TARGET", self.target_row, self.target_host_t),
+            format_torque_line(self.torque_row, self.torque_host_t),
         ]
 
         if not self.ansi_ok or self.lines_rendered == 0:
@@ -459,6 +510,9 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "robot_target": np.array(sink.target_rows, dtype=float)
         if sink.target_rows
         else np.empty((0, 23), dtype=float),
+        "torque": np.array(sink.torque_rows, dtype=float)
+        if sink.torque_rows
+        else np.empty((0, 7), dtype=float),
     }
 
     mat_path = os.path.join(outdir, "usb_log.mat")
@@ -549,6 +603,19 @@ def run(args: argparse.Namespace) -> int:
                                 )
                                 realtime_emit_append(message, args)
                                 latest_display.update("target", row, host_t)
+                        elif kind == "torque":
+                            row = list(decoded["row"])
+                            sink.write_torque(host_t, row)
+                            if getattr(args, "realtime", False):
+                                ts = time.strftime("%H:%M:%S", time.localtime(host_t))
+                                message = (
+                                    f"[TORQUE] {ts} tick={int(row[0])} "
+                                    f"Tr={row[1]:.3f} Tl={row[2]:.3f} "
+                                    f"Twr={row[3]:.3f} Twl={row[4]:.3f} "
+                                    f"Tt={row[5]:.3f}"
+                                )
+                                realtime_emit_append(message, args)
+                                latest_display.update("torque", row, host_t)
                         else:
                             parser.stats.unknown_id += 1
                             sink.write_unknown(

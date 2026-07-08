@@ -182,6 +182,7 @@ typedef struct
     Tail_t tail;              // 尾巴状态
     TailState_t tail_state;    // 尾巴状态量
     ChassisSpeedVector_t speed_vector;  // 底盘速度向量
+    float torque[5];            // N*m 控制力矩输出: [0]=T_r_to_b(右髋), [1]=T_l_to_b(左髋), [2]=T_wr_to_r(右轮), [3]=T_wl_to_l(左轮), [4]=T_t_to_b(尾)
 } Fdb_t;
 
 /**

@@ -16,6 +16,7 @@
 #define IMU_DATA_SEND_ID          ((uint8_t)0x02)
 #define ROBOT_MOTION_DATA_SEND_ID ((uint8_t)0x08)
 #define ROBOT_TARGET_DATA_SEND_ID ((uint8_t)0x0B)
+#define TORQUE_DATA_SEND_ID       ((uint8_t)0x0C)
 
 #define ROBOT_CMD_DATA_RECEIVE_ID  ((uint8_t)0x01)
 #define VIRTUAL_RC_DATA_RECEIVE_ID ((uint8_t)0x03)
@@ -134,6 +135,22 @@ typedef struct
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataRobotTarget_s;
+
+// 控制力矩数据包
+typedef struct
+{
+    FrameHeader_t frame_header;  // 数据段id = 0x0C
+    uint32_t time_stamp;
+    struct
+    {
+        float T_r_to_b;    // N*m 右髋力矩
+        float T_l_to_b;    // N*m 左髋力矩
+        float T_wr_to_r;   // N*m 右轮力矩
+        float T_wl_to_l;   // N*m 左轮力矩
+        float T_t_to_b;    // N*m 尾电机力矩
+    } __packed__ data;
+    uint16_t crc;
+} __packed__ SendDataTorque_s;
 
 /*-------------------- Receive --------------------*/
 typedef struct RobotCmdData
