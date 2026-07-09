@@ -452,47 +452,46 @@ static void ResetXStateOnModeSwitch(void)
 // }
 void ChassisSetMode(void)
 {
-    ChassisMode_e old_mode = CHASSIS.mode;
-    ChassisMode_e new_mode = CHASSIS.mode;
+    static int16_t prev_mode_sw  = 0;  // 上一次 CHASSIS_MODE_CHANNEL 值
+    static int16_t prev_func_sw  = 0;  // 上一次 CHASSIS_FUNCTION 值
+    static bool    prev_valid    = false;
 
-    if (CHASSIS.error_code & DBUS_ERROR_OFFSET) {
-        new_mode = CHASSIS_SAFE;
-    } else if (CHASSIS.error_code & IMU_ERROR_OFFSET) {
-        new_mode = CHASSIS_SAFE;
-    } else if (CHASSIS.error_code & JOINT_ERROR_OFFSET) {
-        new_mode = CHASSIS_SAFE;
-    } else {
-#if TAKE_OFF_DETECT
-    for (uint8_t i = 0; i < 2; i++) {
-        if (CHASSIS.fdb.leg[i].is_take_off &&
-            CHASSIS.fdb.leg[i].touch_time > TOUCH_TOGGLE_THRESHOLD) {
-            CHASSIS.fdb.leg[i].is_take_off = false;
-        } else if (
-            !CHASSIS.fdb.leg[i].is_take_off &&
-            CHASSIS.fdb.leg[i].take_off_time > TOUCH_TOGGLE_THRESHOLD) {
-            CHASSIS.fdb.leg[i].is_take_off = true;
-        }
+    int16_t mode_sw = CHASSIS.rc->rc.ch[CHASSIS_MODE_CHANNEL];
+    int16_t func_sw = CHASSIS.rc->rc.ch[CHASSIS_FUNCTION];
+
+    // 错误状态强制安全模式
+    if (CHASSIS.error_code & (DBUS_ERROR_OFFSET | IMU_ERROR_OFFSET | JOINT_ERROR_OFFSET)) {
+        CHASSIS.mode = CHASSIS_SAFE;
+        ResetXStateOnModeSwitch();
+        last_mode = CHASSIS_SAFE;
+        return;
     }
-#endif
 
-        if (switch_is_up(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
-            new_mode = CHASSIS_NOTAIL;
-        } else if (switch_is_mid(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
-        if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_FUNCTION]))
-                new_mode = CHASSIS_BIPEDAL;
-            else
-                new_mode = CHASSIS_TRIPOD;
-        } else if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
-            new_mode = CHASSIS_JOINED;
-        }
+    // 开关值未变化则跳过
+    if (prev_valid && mode_sw == prev_mode_sw && func_sw == prev_func_sw) {
+        return;
+    }
+
+    // 记录新开关值
+    prev_mode_sw = mode_sw;
+    prev_func_sw = func_sw;
+    prev_valid   = true;
+
+    ChassisMode_e new_mode;
+
+    if (switch_is_mid(mode_sw) && switch_is_up(func_sw)) {
+        new_mode = CHASSIS_NOTAIL;
+    } else if (switch_is_mid(mode_sw) && switch_is_down(func_sw)) {
+        new_mode = CHASSIS_BIPEDAL;
+    } else if (switch_is_mid(mode_sw) && switch_is_mid(func_sw)) {
+        new_mode = CHASSIS_TRIPOD;
+    } else {
+        new_mode = CHASSIS_SAFE;
     }
 
     CHASSIS.mode = new_mode;
-
-    if (new_mode != old_mode) {
-        ResetXStateOnModeSwitch();
-        last_mode = new_mode;
-    }
+    ResetXStateOnModeSwitch();
+    last_mode = new_mode;
 }
 
 /******************************************************************/
@@ -745,33 +744,34 @@ static void UpdateStepStatus(void)  //感觉只是跳
 {
     CHASSIS.step_time += CHASSIS.duration;
 
-    if (CHASSIS.mode == CHASSIS_BIPEDAL) {
-        if (0 && (GetDt7RcCh(DT7_CH_RH) < -0.9f)) {  // 遥控器左侧水平摇杆打到左边切换至跳跃状态
-            CHASSIS.step_time = 0;
-            CHASSIS.step = JUMP_STEP_SQUST;
-        } else if (CHASSIS.step == JUMP_STEP_SQUST) {  // 跳跃——蹲下蓄力状态
-            if (CHASSIS.fdb.leg[0].rod.L0 < MIN_LEG_LENGTH + 0.02f &&
-                CHASSIS.fdb.leg[1].rod.L0 < MIN_LEG_LENGTH + 0.02f) {
-                StateTransfer();
-            }
-        } else if (CHASSIS.step == JUMP_STEP_JUMP) {  // 跳跃——起跳状态
-            if (CHASSIS.fdb.leg[0].rod.L0 > MAX_LEG_LENGTH - 0.03f &&
-                CHASSIS.fdb.leg[1].rod.L0 > MAX_LEG_LENGTH - 0.03f) {
-                StateTransfer();
-            }
-        } else if (CHASSIS.step == JUMP_STEP_RECOVERY) {  // 跳跃——收腿状态
-            if (CHASSIS.step_time > 1000) {               // 1000ms后切换状态
-                StateTransfer();
-            }
-        } else if (CHASSIS.step != NORMAL_STEP && CHASSIS.step_time > MAX_STEP_TIME) {
-            // 状态持续时间超过 MAX_STEP_TIME ，自动切换到NORMAL状态
-            CHASSIS.step_time = 0;
-            CHASSIS.step = NORMAL_STEP;
-        }
-    } else {
-        CHASSIS.step_time = 0;
-        CHASSIS.step = NORMAL_STEP;
-    }
+    // if (CHASSIS.mode == CHASSIS_BIPEDAL) 
+    // {
+    //     if (GetDt7RcCh(DT7_CH_RH) < -0.9f) {  // CH4左平摇杆→左边, 触发跳跃 (ch[3] * 1/800)
+    //         CHASSIS.step_time = 0;
+    //         CHASSIS.step = JUMP_STEP_SQUST;
+    //     } else if (CHASSIS.step == JUMP_STEP_SQUST) {  // 跳跃——蹲下蓄力状态
+    //         if (CHASSIS.fdb.leg[0].rod.L0 < MIN_LEG_LENGTH + 0.02f &&
+    //             CHASSIS.fdb.leg[1].rod.L0 < MIN_LEG_LENGTH + 0.02f) {
+    //             StateTransfer();
+    //         }
+    //     } else if (CHASSIS.step == JUMP_STEP_JUMP) {  // 跳跃——起跳状态
+    //         if (CHASSIS.fdb.leg[0].rod.L0 > MAX_LEG_LENGTH - 0.03f &&
+    //             CHASSIS.fdb.leg[1].rod.L0 > MAX_LEG_LENGTH - 0.03f) {
+    //             StateTransfer();
+    //         }
+    //     } else if (CHASSIS.step == JUMP_STEP_RECOVERY) {  // 跳跃——收腿状态
+    //         if (CHASSIS.step_time > 1000) {               // 1000ms后切换状态
+    //             StateTransfer();
+    //         }
+    //     } else if (CHASSIS.step != NORMAL_STEP && CHASSIS.step_time > MAX_STEP_TIME) {
+    //         // 状态持续时间超过 MAX_STEP_TIME ，自动切换到NORMAL状态
+    //         CHASSIS.step_time = 0;
+    //         CHASSIS.step = NORMAL_STEP;
+    //     }
+    // } else {
+    //     CHASSIS.step_time = 0;
+    //     CHASSIS.step = NORMAL_STEP;
+    // }
 }
 #undef StateTransfer
 
@@ -1199,25 +1199,25 @@ void ChassisReference(void)
     int16_t rc_length = 0, rc_angle = 0, rc_tail = 0;
     int16_t rc_roll = 0, rc_pitch = 0;
 
-    // 0-右平, 1-右竖, 2-左平, 3-左竖, 4-左滚轮
-    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_X_CHANNEL], rc_x, CHASSIS_RC_DEADLINE);    //3
-    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_WZ_CHANNEL], rc_wz, CHASSIS_RC_DEADLINE);  //2
+    // rc.ch[0]=CH1右平, ch[1]=CH2右竖, ch[2]=CH3左竖, ch[3]=CH4左平
+    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_X_CHANNEL], rc_x, CHASSIS_RC_DEADLINE);    // ch[2]=CH3左竖→前后
+    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_WZ_CHANNEL], rc_wz, CHASSIS_RC_DEADLINE);  // ch[3]=CH4左平→旋转
 
-    if (switch_is_up(CHASSIS.rc->rc.s[CHASSIS_FUNCTION])) {
+    if (switch_is_up(CHASSIS.rc->rc.ch[CHASSIS_FUNCTION])) {
         rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_PITCH_CHANNEL], rc_pitch, CHASSIS_RC_DEADLINE);  //1
+            CHASSIS.rc->rc.ch[CHASSIS_PITCH_CHANNEL], rc_pitch, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→pitch
         rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_ROLL_CHANNEL], rc_roll, CHASSIS_RC_DEADLINE);  //0
-    } else if (switch_is_mid(CHASSIS.rc->rc.s[CHASSIS_FUNCTION])) {
+            CHASSIS.rc->rc.ch[CHASSIS_ROLL_CHANNEL], rc_roll, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→roll
+    } else if (switch_is_mid(CHASSIS.rc->rc.ch[CHASSIS_FUNCTION])) {
         rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_ANGLE_CHANNEL], rc_angle, CHASSIS_RC_DEADLINE);  //1
+            CHASSIS.rc->rc.ch[CHASSIS_ANGLE_CHANNEL], rc_angle, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→摆角
         rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  //0
-    } else if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_FUNCTION])) {
+            CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
+    } else if (switch_is_down(CHASSIS.rc->rc.ch[CHASSIS_FUNCTION])) {
         rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_TAIL_POS_CHANNEL], rc_tail, CHASSIS_RC_DEADLINE);  //1
+            CHASSIS.rc->rc.ch[CHASSIS_TAIL_POS_CHANNEL], rc_tail, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→尾巴
         rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  //0
+            CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
     }
 
     // 计算速度向量
@@ -1360,19 +1360,15 @@ void ChassisReference(void)
     CHASSIS.ref.tail_state.beta_dot    =  0;
     // clang-format on
 
-    // 夹爪目标量：CH7 二档控制，低档闭合，高档张开。
+    // 夹爪目标量：CH7 开关 (rc.ch[6]) 上档张开，中/下档闭合
     static uint8_t clamp_target_position = 0x00;
     static bool clamp_target_valid = false;
-    const Sbus_t *sbus = get_sbus_point();
-    const uint16_t clamp_ch7_raw = (sbus == NULL) ? 0U : sbus->ch[6];
-    const uint8_t clamp_target = (clamp_ch7_raw >= 1500U) ? 0xFFU : 0x00U;
+    const uint8_t clamp_target = switch_is_up(CHASSIS.rc->rc.ch[6]) ? 0xFFU : 0x00U;
 
-    if (sbus != NULL) {
-        if ((!clamp_target_valid) || (clamp_target_position != clamp_target)) {
-            clamp_target_valid = true;
-            clamp_target_position = clamp_target;
-            ClampSetTarget(clamp_target_position, 0xFF, 0xFF);
-        }
+    if ((!clamp_target_valid) || (clamp_target_position != clamp_target)) {
+        clamp_target_valid = true;
+        clamp_target_position = clamp_target;
+        ClampSetTarget(clamp_target_position, 0xFF, 0xFF);
     }
 
 

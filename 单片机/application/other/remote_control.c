@@ -48,8 +48,8 @@
 // 非dt7遥控器连续断线上线次数（超过认为断连）
 #define SBUS_MAX_LOST_NUN 10
 
-//遥控器出错数据上限
-#define RC_CHANNAL_ERROR_VALUE 700
+//遥控器出错数据上限 (SBUS偏移量纲, ±800半量程, 900留约12.5%余量)
+#define RC_CHANNAL_ERROR_VALUE 900
 
 extern UART_HandleTypeDef huart3;
 extern DMA_HandleTypeDef hdma_usart3_rx;
@@ -144,51 +144,24 @@ const Sbus_t *get_sbus_point(void)
     return &sbus;
 }
 
+static void RC_reset_all_channels(void)
+{
+    for (uint8_t i = 0; i < 8; i++) {
+        rc_ctrl.rc.ch[i] = 0;
+    }
+}
+
 //判断遥控器数据是否出错，
 uint8_t RC_data_is_error(void)
 {
-    //使用了go to语句 方便出错统一处理遥控器变量数据归零
-    if (RC_abs(rc_ctrl.rc.ch[0]) > RC_CHANNAL_ERROR_VALUE)
-    {
-        goto error;
+    for (uint8_t i = 0; i < 8; i++) {
+        if (RC_abs(rc_ctrl.rc.ch[i]) > RC_CHANNAL_ERROR_VALUE) {
+            RC_reset_all_channels();
+            return 1;
+        }
     }
-    if (RC_abs(rc_ctrl.rc.ch[1]) > RC_CHANNAL_ERROR_VALUE)
-    {
-        goto error;
-    }
-    if (RC_abs(rc_ctrl.rc.ch[2]) > RC_CHANNAL_ERROR_VALUE)
-    {
-        goto error;
-    }
-    if (RC_abs(rc_ctrl.rc.ch[3]) > RC_CHANNAL_ERROR_VALUE)
-    {
-        goto error;
-    }
-    if (rc_ctrl.rc.s[0] == 0)
-    {
-        goto error;
-    }
-    if (rc_ctrl.rc.s[1] == 0)
-    {
-        goto error;
-    }
-    return 0;
 
-error:
-    rc_ctrl.rc.ch[0] = 0;
-    rc_ctrl.rc.ch[1] = 0;
-    rc_ctrl.rc.ch[2] = 0;
-    rc_ctrl.rc.ch[3] = 0;
-    rc_ctrl.rc.ch[4] = 0;
-    rc_ctrl.rc.s[0] = RC_SW_DOWN;
-    rc_ctrl.rc.s[1] = RC_SW_DOWN;
-    rc_ctrl.mouse.x = 0;
-    rc_ctrl.mouse.y = 0;
-    rc_ctrl.mouse.z = 0;
-    rc_ctrl.mouse.press_l = 0;
-    rc_ctrl.mouse.press_r = 0;
-    rc_ctrl.key.v = 0;
-    return 1;
+    return 0;
 }
 
 void slove_RC_lost(void)
@@ -371,21 +344,16 @@ static void sbus_to_rc(volatile const uint8_t *sbus_buf, RC_ctrl_t *rc_ctrl)
     rc_ctrl->rc.ch[2] = ((sbus_buf[2] >> 6) | (sbus_buf[3] << 2) |          //!< Channel 2
                          (sbus_buf[4] << 10)) &0x07ff;
     rc_ctrl->rc.ch[3] = ((sbus_buf[4] >> 1) | (sbus_buf[5] << 7)) & 0x07ff; //!< Channel 3
-    rc_ctrl->rc.s[0] = ((sbus_buf[5] >> 4) & 0x0003);                  //!< Switch left
-    rc_ctrl->rc.s[1] = ((sbus_buf[5] >> 4) & 0x000C) >> 2;                       //!< Switch right
-    rc_ctrl->mouse.x = sbus_buf[6] | (sbus_buf[7] << 8);                    //!< Mouse X axis
-    rc_ctrl->mouse.y = sbus_buf[8] | (sbus_buf[9] << 8);                    //!< Mouse Y axis
-    rc_ctrl->mouse.z = sbus_buf[10] | (sbus_buf[11] << 8);                  //!< Mouse Z axis
-    rc_ctrl->mouse.press_l = sbus_buf[12];                                  //!< Mouse Left Is Press ?
-    rc_ctrl->mouse.press_r = sbus_buf[13];                                  //!< Mouse Right Is Press ?
-    rc_ctrl->key.v = sbus_buf[14] | (sbus_buf[15] << 8);                    //!< KeyBoard value
-    rc_ctrl->rc.ch[4] = sbus_buf[16] | (sbus_buf[17] << 8);                 //NULL
+    rc_ctrl->rc.ch[4] = sbus_buf[16] | (sbus_buf[17] << 8);                 //!< 滚轮通道
+    rc_ctrl->rc.ch[5] = ((sbus_buf[5] >> 4) & 0x0003);                      //!< Switch left
+    rc_ctrl->rc.ch[6] = ((sbus_buf[5] >> 4) & 0x000C) >> 2;                 //!< Switch right
 
     rc_ctrl->rc.ch[0] -= RC_CH_VALUE_OFFSET;
     rc_ctrl->rc.ch[1] -= RC_CH_VALUE_OFFSET;
     rc_ctrl->rc.ch[2] -= RC_CH_VALUE_OFFSET;
     rc_ctrl->rc.ch[3] -= RC_CH_VALUE_OFFSET;
     rc_ctrl->rc.ch[4] -= RC_CH_VALUE_OFFSET;
+    rc_ctrl->rc.ch[7] = 0;
 }
 
 // SBUS通道解析
@@ -415,15 +383,12 @@ static void sbus_to_rc(volatile const uint8_t *sbus_buf, RC_ctrl_t *rc_ctrl)
         sbus_lost_count++;                     \
     }
 
-// DT7遥控器特殊通道置零
+// 非HT8A遥控器未使用通道置零
 #define SPECIAL_CHANNEL_SET_SERO()\
-    rc_ctrl->mouse.x = 0;         \
-    rc_ctrl->mouse.y = 0;         \
-    rc_ctrl->mouse.z = 0;         \
-    rc_ctrl->mouse.press_l = 0;   \
-    rc_ctrl->mouse.press_r = 0;   \
-    rc_ctrl->key.v = 0;           \
-    rc_ctrl->rc.ch[4] = 0;        \
+    rc_ctrl->rc.ch[4] = 0;         \
+    rc_ctrl->rc.ch[5] = 0;         \
+    rc_ctrl->rc.ch[6] = 0;         \
+    rc_ctrl->rc.ch[7] = 0;
 
 #if (__RC_TYPE == RC_AT9S_PRO)
 
@@ -450,12 +415,13 @@ static void At9sProSbusToRc(volatile const uint8_t *sbus_buf, RC_ctrl_t *rc_ctrl
     rc_ctrl->rc.ch[2] =  (sbus.ch[3] - AT9S_PRO_RC_CH_VALUE_OFFSET) / 800.0f * 660;
     rc_ctrl->rc.ch[3] =  (sbus.ch[2] - AT9S_PRO_RC_CH_VALUE_OFFSET) / 800.0f * 660;
 
-    static char sw_mapping[3] = {RC_SW_UP, RC_SW_MID, RC_SW_DOWN};
-    rc_ctrl->rc.s[0] = sw_mapping[(sbus.ch[5] - AT9S_PRO_RC_CH_VALUE_OFFSET) / 800 + 1];
-    rc_ctrl->rc.s[1] = sw_mapping[(sbus.ch[4] - AT9S_PRO_RC_CH_VALUE_OFFSET) / 800 + 1];
+    // 开关存为SBUS偏移值
+    rc_ctrl->rc.ch[4] = (int16_t)(sbus.ch[4] - AT9S_PRO_RC_CH_VALUE_OFFSET);  // CH5 SwE
+    rc_ctrl->rc.ch[5] = (int16_t)(sbus.ch[5] - AT9S_PRO_RC_CH_VALUE_OFFSET);  // CH6 SwG
 
-    // AT9S PRO 遥控器没有鼠标和键盘数据
-    SPECIAL_CHANNEL_SET_SERO()
+    // AT9S PRO 未使用通道置零
+    rc_ctrl->rc.ch[6] = 0;
+    rc_ctrl->rc.ch[7] = 0;
 }
 
 #elif (__RC_TYPE == RC_HT8A)
@@ -477,18 +443,12 @@ static void Ht8aSbusToRc(volatile const uint8_t *sbus_buf, RC_ctrl_t *rc_ctrl)
     SBUS_DECODE()
     SBUS_LOST_CHECK()
 
-    // 将SBUS通道数据转换为DT7遥控器数据，方便兼容使用
-    rc_ctrl->rc.ch[0] =  (sbus.ch[0] - HT8A_RC_CH013_VALUE_OFFSET) / 560.0f * 660;
-    rc_ctrl->rc.ch[1] =  (sbus.ch[1] - HT8A_RC_CH013_VALUE_OFFSET) / 560.0f * 660;
-    rc_ctrl->rc.ch[2] =  (sbus.ch[3] - HT8A_RC_CH013_VALUE_OFFSET) / 560.0f * 660;
-    rc_ctrl->rc.ch[3] =  (sbus.ch[2] - HT8A_RC_CH247_VALUE_OFFSET) / 800.0f * 660;
+    // 1:1 映射: rc.ch[i] = sbus.ch[i] - 中值, 保留全部11-bit精度
+    // HT8A: CH1-4 = 油门, CH5-8 = 开关
+    for (uint8_t i = 0; i < 8; i++) {
+        rc_ctrl->rc.ch[i] = (int16_t)(sbus.ch[i] - HT8A_RC_CH_VALUE_OFFSET);
+    }
 
-    static char sw_mapping[3] = {RC_SW_UP, RC_SW_MID, RC_SW_DOWN};
-    rc_ctrl->rc.s[0] = sw_mapping[(sbus.ch[7] - HT8A_RC_CH247_VALUE_OFFSET) / 800 + 1];
-    rc_ctrl->rc.s[1] = sw_mapping[(sbus.ch[4] - HT8A_RC_CH247_VALUE_OFFSET) / 800 + 1];
-
-    // HT8A 遥控器没有鼠标和键盘数据
-    SPECIAL_CHANNEL_SET_SERO()
 }
 
 #elif (__RC_TYPE == RC_ET08A)
@@ -515,12 +475,13 @@ static void Et08aSbusToRc(volatile const uint8_t *sbus_buf, RC_ctrl_t *rc_ctrl){
     rc_ctrl->rc.ch[2] =  (sbus.ch[3] - ET08A_RC_CH_VALUE_OFFSET) / 671.0f * 660;
     rc_ctrl->rc.ch[3] =  (sbus.ch[2] - ET08A_RC_CH_VALUE_OFFSET) / 671.0f * 660;
 
-    static char sw_mapping[3] = {RC_SW_UP, RC_SW_MID, RC_SW_DOWN};
-    rc_ctrl->rc.s[0] = sw_mapping[(sbus.ch[5] - ET08A_RC_CH_VALUE_OFFSET) / 670 + 1];
-    rc_ctrl->rc.s[1] = sw_mapping[(sbus.ch[4] - ET08A_RC_CH_VALUE_OFFSET) / 670 + 1];
+    // 开关存为SBUS偏移值
+    rc_ctrl->rc.ch[4] = (int16_t)(sbus.ch[4] - ET08A_RC_CH_VALUE_OFFSET);  // CH5 SC
+    rc_ctrl->rc.ch[5] = (int16_t)(sbus.ch[5] - ET08A_RC_CH_VALUE_OFFSET);  // CH6 SB
 
-    // ET08A 遥控器没有鼠标和键盘数据
-    SPECIAL_CHANNEL_SET_SERO()
+    // ET08A 未使用通道置零
+    rc_ctrl->rc.ch[6] = 0;
+    rc_ctrl->rc.ch[7] = 0;
 }
 
 #endif
@@ -558,10 +519,6 @@ void sbus_to_usart1(uint8_t *sbus)
 /*----------------------------------------------------------------*/
 /* function:      GetRcOffline                                    */
 /*                GetDt7RcCh                                      */
-/*                GetDt7RcSw                                      */
-/*                GetDt7MouseSpeed                                */
-/*                GetDt7Mouse                                     */
-/*                GetDt7Keyboard                                  */
 /******************************************************************/
 
 /**
@@ -595,50 +552,4 @@ inline bool GetRcOffline(void)
   * @retval         DT7遥控器通道值，范围为 [−1,1]
   */
 inline float GetDt7RcCh(uint8_t ch) { return rc_ctrl.rc.ch[ch] * RC_TO_ONE; }
-/**
-  * @brief          获取DT7遥控器拨杆值，可配合switch_is_xxx系列宏函数使用。
-  * @param[in]      sw 通道id，0-右, 1-左，配合sw id宏进行使用
-  * @retval         DT7遥控器拨杆值，范围为{1,2,3}
-  */
-inline char GetDt7RcSw(uint8_t sw) { return rc_ctrl.rc.s[sw]; }
-/**
-  * @brief          获取鼠标axis轴的移动速度
-  * @param[in]      axis 轴id, 0-, 1-, 2-，配合轴id宏进行使用
-  * @retval         鼠标axis轴移动速度，范围为[,]
-  */
-inline float GetDt7MouseSpeed(uint8_t axis)
-{
-    switch (axis) {
-        case AX_X:
-            return rc_ctrl.mouse.x;
-        case AX_Y:
-            return rc_ctrl.mouse.y;
-        case AX_Z:
-            return rc_ctrl.mouse.z;
-        default:
-            return 0;
-    }
-}
-/**
-  * @brief          获取鼠标按键信息
-  * @param[in]      key 按键id，配合按键id宏进行使用
-  * @retval         鼠标按键是否被按下
-  */
-inline bool GetDt7Mouse(uint8_t key)
-{
-    switch (key) {
-        case KEY_LEFT:
-            return rc_ctrl.mouse.press_l;
-        case KEY_RIGHT:
-            return rc_ctrl.mouse.press_r;
-        default:
-            return 0;
-    }
-}
-/**
-  * @brief          获取键盘按键信息
-  * @param[in]      key 按键id，配合按键id宏进行使用
-  * @retval         键盘按键是否被按下
-  */
-inline bool GetDt7Keyboard(uint8_t key) { return rc_ctrl.key.v & ((uint16_t)1 << key); }
-/*------------------------------ End of File ------------------------------*/
+

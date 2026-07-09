@@ -22,20 +22,22 @@
 #define CHASSIS_CONTROL_TIME_S (CHASSIS_CONTROL_TIME_MS / 1000.0f)   // 底盘任务控制间隔
 
 // 底盘的遥控器相关宏定义 ---------------------
-#define CHASSIS_MODE_CHANNEL   1  // 选择底盘状态 开关通道号
-#define CHASSIS_FUNCTION       0  // 进一步选择底盘状态 开关通道号
+// HT8A 1:1映射: rc.ch[i] = sbus.ch[i] - 中值
+// CH1(ch0)=右平, CH2(ch1)=右竖, CH3(ch2)=左竖, CH4(ch3)=左平
+// CH5(ch4)=开关1, CH6(ch5)=开关2, CH7(ch6)=开关3, CH8(ch7)=开关4
+#define CHASSIS_MODE_CHANNEL   4  // 选择底盘状态 开关通道号 (CH5)
+#define CHASSIS_FUNCTION       7  // 进一步选择底盘状态 开关通道号 (CH8)
 
-#define CHASSIS_X_CHANNEL      3  // 前后的遥控器通道号码
-#define CHASSIS_Y_CHANNEL      2  // 左右的遥控器通道号码
-#define CHASSIS_WZ_CHANNEL     2  // 旋转的遥控器通道号码
-#define CHASSIS_ANGLE_CHANNEL  1  // 腿摆角的遥控器通道号码
-#define CHASSIS_LENGTH_CHANNEL 0  // 腿长的遥控器通道号码
-#define CHASSIS_ROLL_CHANNEL   0  // ROLL角的遥控器通道号码
-#define CHASSIS_PITCH_CHANNEL  1  // ROLL角的遥控器通道号码
-#define CHASSIS_TAIL_POS_CHANNEL 1  // 腿长的遥控器通道号码
-#define CHASSIS_HAND_CHANNEL   0  // 夹爪遥控器通道号码（通道1，右摇杆左右）
-#define CHASSIS_RC_DEADLINE    20 // 摇杆死区
-// 0-右平, 1-右竖, 2-左平, 3-左竖, 4-左滚轮
+#define CHASSIS_X_CHANNEL      2  // 前后的遥控器通道号码 (CH3 左竖)
+#define CHASSIS_Y_CHANNEL      3  // 左右的遥控器通道号码 (CH4 左平)
+#define CHASSIS_WZ_CHANNEL     3  // 旋转的遥控器通道号码 (CH4 左平)
+#define CHASSIS_ANGLE_CHANNEL  1  // 腿摆角的遥控器通道号码 (CH2 右竖)
+#define CHASSIS_LENGTH_CHANNEL 0  // 腿长的遥控器通道号码 (CH1 右平)
+#define CHASSIS_ROLL_CHANNEL   0  // ROLL角的遥控器通道号码 (CH1 右平)
+#define CHASSIS_PITCH_CHANNEL  1  // PITCH角的遥控器通道号码 (CH2 右竖)
+#define CHASSIS_TAIL_POS_CHANNEL 1  // 尾巴位置的遥控器通道号码 (CH2 右竖)
+#define CHASSIS_HAND_CHANNEL   0  // 夹爪遥控器通道号码 (CH1 右平)
+#define CHASSIS_RC_DEADLINE    16 // 摇杆死区 (SBUS偏移单位, 16/800=2%)
 
 // deadzone parameters ---------------------
 #define WHEEL_DEADZONE (0.01f)  // (m/s)轮子速度死区

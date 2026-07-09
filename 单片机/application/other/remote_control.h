@@ -58,20 +58,13 @@
 
 #define AT9S_PRO_RC_CONNECTED_FLAG       ((uint8_t)12)
 
-// HT8A 遥控器通道值范围
-#define HT8A_RC_CH013_VALUE_MIN         ((uint16_t)432)
-#define HT8A_RC_CH013_VALUE_OFFSET      ((uint16_t)992)
-#define HT8A_RC_CH013_VALUE_MAX         ((uint16_t)1552)
+// HT8A 遥控器通道值范围 (所有8通道统一)
+// 中值992, 半量程±800, 最低192, 最高1792
+#define HT8A_RC_CH_VALUE_MIN         ((uint16_t)192)
+#define HT8A_RC_CH_VALUE_OFFSET      ((uint16_t)992)
+#define HT8A_RC_CH_VALUE_MAX         ((uint16_t)1792)
 
-#define HT8A_RC_CH247_VALUE_MIN         ((uint16_t)192)
-#define HT8A_RC_CH247_VALUE_OFFSET      ((uint16_t)992)
-#define HT8A_RC_CH247_VALUE_MAX         ((uint16_t)1792)
-
-#define HT8A_RC_CH47_VALUE_MIN         ((uint16_t)192)
-#define HT8A_RC_CH47_VALUE_OFFSET      ((uint16_t)992)
-#define HT8A_RC_CH47_VALUE_MAX         ((uint16_t)1792)
-
-#define HT8A_RC_CONNECTED_FLAG         ((uint8_t)12)
+#define HT8A_RC_CONNECTED_FLAG       ((uint8_t)12)
 
 // ET08A 遥控器通道值范围
 #define ET08A_RC_CH_VALUE_MIN         ((uint16_t)353)
@@ -80,15 +73,14 @@
 
 #define ET08A_RC_CONNECTED_FLAG       ((uint8_t)0)
 
-#define RC_TO_ONE 0.0015151515151515f  // (1/660)遥控器通道值归一化系数
+#define RC_TO_ONE 0.00125f  // (1/800) HT8A 遥控器通道值归一化系数
 
 /* ----------------------- RC Switch Definition----------------------------- */
-#define RC_SW_UP                ((uint16_t)1)
-#define RC_SW_MID               ((uint16_t)3)
-#define RC_SW_DOWN              ((uint16_t)2)
-#define switch_is_down(s)       (s == RC_SW_DOWN)
-#define switch_is_mid(s)        (s == RC_SW_MID)
-#define switch_is_up(s)         (s == RC_SW_UP)
+#define SWITCH_THRESHOLD  300  // 开关阈值：离中值(992)超过±300即判定为上/下位
+
+#define switch_is_down(s)     ((s) >  SWITCH_THRESHOLD)  // 下位数值1792
+#define switch_is_mid(s)    ((s) >= -SWITCH_THRESHOLD && (s) <= SWITCH_THRESHOLD)
+#define switch_is_up(s)   ((s) <  -SWITCH_THRESHOLD)  // 上位数值192
 
 #define RC_CH_LEFT_HORIZONTAL   ((uint8_t)2)
 #define RC_CH_LEFT_VERTICAL     ((uint8_t)3)
@@ -141,22 +133,8 @@ typedef struct __RC_ctrl
 {
         struct __rc
         {
-                int16_t ch[5];
-                char s[2];
+                int16_t ch[8];
         } __packed__ rc;
-        struct __mouse
-        {
-                int16_t x;
-                int16_t y;
-                int16_t z;
-                uint8_t press_l;
-                uint8_t press_r;
-        } __packed__ mouse;
-        struct __key
-        {
-                uint16_t v;
-        } __packed__ key;
-
 } __packed__ RC_ctrl_t;
 
 typedef struct
@@ -183,10 +161,6 @@ extern void sbus_to_usart1(uint8_t * sbus);
 extern inline bool GetRcOffline(void);
 
 extern inline float GetDt7RcCh(uint8_t ch);
-extern inline char GetDt7RcSw(uint8_t sw);
-extern inline float GetDt7MouseSpeed(uint8_t axis);
-extern inline bool GetDt7Mouse(uint8_t key);
-extern inline bool GetDt7Keyboard(uint8_t key);
 
 #endif
 /*------------------------------ End of File ------------------------------*/

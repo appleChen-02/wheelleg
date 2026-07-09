@@ -17,7 +17,7 @@
 #define DT7_SW_RIGHT 0 // DT7遥控器右侧拨杆通道号
 #define DT7_CH_LH 0 // DT7遥控器右侧水平摇杆通道号
 #define DT7_CH_LV 1 // DT7遥控器右侧竖直摇杆通道号
-#define DT7_CH_RH 2 // DT7遥控器左侧水平摇杆通道号
+#define DT7_CH_RH 3 // 左侧水平摇杆通道号 (HT8A CH4 → rc.ch[3])
 #define DT7_CH_RV 3 // DT7遥控器左侧竖直摇杆通道号
 #define DT7_CH_ROLLER 4 // DT7遥控器左上角滚轮通道号
 
