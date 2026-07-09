@@ -49,6 +49,7 @@
 #define LIFTED_UP 0        // 被架起
 #define PRO_CONTROLLER 1   //
 #define VX_REF_ALPHA 0.12f
+#define TAIL_BETA_ALPHA 0.15f
 
 // Parameters on ---------------------
 #define MS_TO_S 0.001f
@@ -512,6 +513,8 @@ static void UpdateMotorStatus(void);
 static void UpdateStepStatus(void);
 static void BodyMotionObserve(void);
 
+
+#pragma region 更新状态量
 /**
  * @brief          更新状态量
  * @param[in]      none
@@ -1182,7 +1185,10 @@ void SolveThetaBetaBodyCenter(float l, float phi_guess, float *theta_ref, float 
     *theta_ref = best_theta;
     *phi_ref   = best_phi;
 }
+#pragma endregion
 
+
+#pragma region 更新目标量
 /**
  * @brief          更新目标量
  * @param[in]      none
@@ -1350,7 +1356,8 @@ void ChassisReference(void)
         CHASSIS.ref.leg_state[i].phi       =  CHASSIS.ref.body.pitch;
         CHASSIS.ref.leg_state[i].phi_dot   =  0;
     }
-    CHASSIS.ref.tail_state.beta        =  tail_angle;
+    // 一阶低通后的尾巴摆角期望
+    CHASSIS.ref.tail_state.beta += TAIL_BETA_ALPHA * (tail_angle - CHASSIS.ref.tail_state.beta);
     CHASSIS.ref.tail_state.beta_dot    =  0;
     // clang-format on
 
@@ -1371,7 +1378,10 @@ void ChassisReference(void)
 
 
 }
+#pragma endregion
 
+
+#pragma region 计算控制量
 /******************************************************************/
 /* Console                                                        */
 /*----------------------------------------------------------------*/
@@ -1410,6 +1420,9 @@ static void ConsoleNoTail(void);
 static void ConsoleBipedal(void);
 static void ConsoleTripod(void);
 static void ConsoleStandUp(void);
+
+
+
 
 /**
  * @brief          计算控制量
@@ -2521,6 +2534,8 @@ static void ConsoleStandUp(void)  // 待修改
     CHASSIS.wheel_motor[0].set.value = (feedforward + CHASSIS.pid.stand_up.out) * W0_DIRECTION;
     CHASSIS.wheel_motor[1].set.value = (feedforward + CHASSIS.pid.stand_up.out) * W1_DIRECTION;
 }
+#pragma endregion
+
 
 /******************************************************************/
 /* Cmd                                                            */
