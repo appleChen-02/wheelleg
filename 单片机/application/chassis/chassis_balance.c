@@ -514,7 +514,6 @@ static void UpdateStepStatus(void);
 static void BodyMotionObserve(void);
 
 
-#pragma region 更新状态量
 /**
  * @brief          更新状态量
  * @param[in]      none
@@ -1185,10 +1184,10 @@ void SolveThetaBetaBodyCenter(float l, float phi_guess, float *theta_ref, float 
     *theta_ref = best_theta;
     *phi_ref   = best_phi;
 }
-#pragma endregion
 
 
-#pragma region 更新目标量
+
+
 /**
  * @brief          更新目标量
  * @param[in]      none
@@ -1378,10 +1377,10 @@ void ChassisReference(void)
 
 
 }
-#pragma endregion
 
 
-#pragma region 计算控制量
+
+
 /******************************************************************/
 /* Console                                                        */
 /*----------------------------------------------------------------*/
@@ -2534,7 +2533,7 @@ static void ConsoleStandUp(void)  // 待修改
     CHASSIS.wheel_motor[0].set.value = (feedforward + CHASSIS.pid.stand_up.out) * W0_DIRECTION;
     CHASSIS.wheel_motor[1].set.value = (feedforward + CHASSIS.pid.stand_up.out) * W1_DIRECTION;
 }
-#pragma endregion
+
 
 
 /******************************************************************/

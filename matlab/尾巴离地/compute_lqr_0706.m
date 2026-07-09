@@ -518,7 +518,7 @@ rho = 100; % 全局缩放因子，后续根据响应、饱和情况修改该数�
 hip_R = 0.000625;
 wheel_R = 0.0494;
 tail_R = 0.0204;
-lqr_R = rho * diag([hip_R, hip_R, wheel_R, wheel_R, tail_R*16]);
+lqr_R = rho * diag([hip_R, hip_R, wheel_R, wheel_R, tail_R*16*1.5]);
 
 fprintf('Q矩阵 (状态权重):\n');
 disp(lqr_Q);
