@@ -49,6 +49,7 @@ uint32_t usb_high_water;
 #define SEND_DURATION_RobotMotion 10  // ms
 #define SEND_DURATION_RobotTarget 10  // ms
 #define SEND_DURATION_Torque      10  // ms
+#define SEND_DURATION_SbusRaw     20  // ms
 
 // clang-format on
 
@@ -79,6 +80,7 @@ static SendDataImu_s         SEND_DATA_IMU;
 static SendDataRobotMotion_s SEND_ROBOT_MOTION_DATA;
 static SendDataRobotTarget_s SEND_ROBOT_TARGET_DATA;
 static SendDataTorque_s     SEND_TORQUE_DATA;
+static SendDataSbusRaw_s    SEND_SBUS_RAW_DATA;
 
 // clang-format on
 
@@ -101,6 +103,7 @@ typedef struct
     uint32_t RobotMotion;
     uint32_t RobotTarget;
     uint32_t Torque;
+    uint32_t SbusRaw;
 } LastSendTime_t;
 static LastSendTime_t LAST_SEND_TIME;
 
@@ -118,6 +121,8 @@ static void UsbSendImuData(void);
 static void UsbSendRobotMotionData(void);
 static void UsbSendRobotTargetData(void);
 static void UsbSendTorqueData(void);
+
+static void UsbSendSbusRawData(void);
 
 /*******************************************************************************/
 /* Receive Function                                                            */
@@ -212,6 +217,14 @@ static void UsbInit(void)
     append_CRC8_check_sum(  // 添加帧头 CRC8 校验位
         (uint8_t *)(&SEND_TORQUE_DATA.frame_header),
         sizeof(SEND_TORQUE_DATA.frame_header));
+
+    // 14.初始化 SBUS 原始数据包
+    SEND_SBUS_RAW_DATA.frame_header.sof = SEND_SOF;
+    SEND_SBUS_RAW_DATA.frame_header.len = (uint8_t)(sizeof(SendDataSbusRaw_s) - 6);
+    SEND_SBUS_RAW_DATA.frame_header.id = SBUS_RAW_DATA_SEND_ID;
+    append_CRC8_check_sum(  // 添加帧头 CRC8 校验位
+        (uint8_t *)(&SEND_SBUS_RAW_DATA.frame_header),
+        sizeof(SEND_SBUS_RAW_DATA.frame_header));
 }
 
 /**
@@ -237,7 +250,8 @@ static void UsbSendData(void)
         if (ChassisSnapshotRead(
                 &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
             CHASSIS_SNAPSHOT_OK) {
-            return;
+            // 快照失败时仍尝试发送sbus原始数据（不依赖快照）
+            goto try_sbus_raw;
         }
     }
 
@@ -252,6 +266,12 @@ static void UsbSendData(void)
     if (send_torque) {
         LAST_SEND_TIME.Torque = now;
         UsbSendTorqueData();
+    }
+
+try_sbus_raw:
+    if ((now - LAST_SEND_TIME.SbusRaw) >= SEND_DURATION_SbusRaw) {
+        LAST_SEND_TIME.SbusRaw = now;
+        UsbSendSbusRawData();
     }
 }
 
@@ -474,6 +494,29 @@ static void UsbSendTorqueData(void)
 
     append_CRC16_check_sum((uint8_t *)&SEND_TORQUE_DATA, sizeof(SendDataTorque_s));
     USB_Transmit((uint8_t *)&SEND_TORQUE_DATA, sizeof(SendDataTorque_s));
+}
+
+/**
+ * @brief 发送 SBUS 遥控器原始 16 通道数据（用于量程标定）
+ */
+static void UsbSendSbusRawData(void)
+{
+    const Sbus_t *sbus = get_sbus_point();
+    if (sbus == NULL) {
+        return;
+    }
+
+    SEND_SBUS_RAW_DATA.time_stamp = HAL_GetTick();
+
+    // 拷贝16通道原始值（逐元素拷贝避免 packed 指针兼容性问题）
+    for (uint8_t i = 0; i < 16; i++) {
+        SEND_SBUS_RAW_DATA.data.ch[i] = sbus->ch[i];
+    }
+    SEND_SBUS_RAW_DATA.data.connect_flag = sbus->connect_flag;
+    SEND_SBUS_RAW_DATA.data.reserved = 0;
+
+    append_CRC16_check_sum((uint8_t *)&SEND_SBUS_RAW_DATA, sizeof(SendDataSbusRaw_s));
+    USB_Transmit((uint8_t *)&SEND_SBUS_RAW_DATA, sizeof(SendDataSbusRaw_s));
 }
 /*******************************************************************************/
 /* Receive Function                                                            */
