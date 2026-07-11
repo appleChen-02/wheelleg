@@ -1200,24 +1200,26 @@ void ChassisReference(void)
     int16_t rc_roll = 0, rc_pitch = 0;
 
     // rc.ch[0]=CH1右平, ch[1]=CH2右竖, ch[2]=CH3左竖, ch[3]=CH4左平
-    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_X_CHANNEL], rc_x, CHASSIS_RC_DEADLINE);    // ch[2]=CH3左竖→前后
-    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_WZ_CHANNEL], rc_wz, CHASSIS_RC_DEADLINE);  // ch[3]=CH4左平→旋转
-
-    if (switch_is_up(CHASSIS.rc->rc.ch[CHASSIS_FUNCTION])) {
-        rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_PITCH_CHANNEL], rc_pitch, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→pitch
-        rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_ROLL_CHANNEL], rc_roll, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→roll
-    } else if (switch_is_mid(CHASSIS.rc->rc.ch[CHASSIS_FUNCTION])) {
-        rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_ANGLE_CHANNEL], rc_angle, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→摆角
-        rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
-    } else if (switch_is_down(CHASSIS.rc->rc.ch[CHASSIS_FUNCTION])) {
-        rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_TAIL_POS_CHANNEL], rc_tail, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→尾巴
-        rc_deadband_limit(
-            CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
+//CHASSIS.mode = CHASSIS_SAFE
+    if (CHASSIS.mode != CHASSIS_SAFE) {
+        rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_X_CHANNEL], rc_x, CHASSIS_RC_DEADLINE);    // ch[2]=CH3左竖→前后
+        rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_WZ_CHANNEL], rc_wz, CHASSIS_RC_DEADLINE);  // ch[3]=CH4左平→旋转
+        if (CHASSIS.mode == CHASSIS_JOINED) {
+            rc_deadband_limit(
+                CHASSIS.rc->rc.ch[CHASSIS_PITCH_CHANNEL], rc_pitch, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→pitch
+            rc_deadband_limit(
+                CHASSIS.rc->rc.ch[CHASSIS_ROLL_CHANNEL], rc_roll, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→roll
+        } else if (CHASSIS.mode == CHASSIS_TRIPOD) {
+            rc_deadband_limit(
+                CHASSIS.rc->rc.ch[CHASSIS_ANGLE_CHANNEL], rc_angle, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→摆角
+            rc_deadband_limit(
+                CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
+        } else if (CHASSIS.mode == CHASSIS_BIPEDAL) {
+            rc_deadband_limit(
+                CHASSIS.rc->rc.ch[CHASSIS_TAIL_POS_CHANNEL], rc_tail, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→尾巴
+            rc_deadband_limit(
+                CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
+        }
     }
 
     // 计算速度向量
@@ -1315,7 +1317,7 @@ void ChassisReference(void)
             angle += rc_angle * RC_TO_ONE * 0.3f;
         } break;
         case CHASSIS_BIPEDAL: {  //尾巴离地 位置控制
-            length = 0.17f + rc_length * RC_TO_ONE * 0.03f;
+            length = 0.18f + rc_length * RC_TO_ONE * 0.1f;
             angle = rc_angle * RC_TO_ONE * 0.3f;  // 待改正，引入重心调节
             // angle = 0.0f;  // 加入质心调节，尾巴上摆，腿往后撤维持重心在同一竖直位置
             // tail_angle = Get_beta_ref(length_fdb, angle_fdb, CHASSIS.fdb.body.pitch) -
@@ -1342,6 +1344,8 @@ void ChassisReference(void)
 
     CHASSIS.ref.rod_L0[0] = length;
     CHASSIS.ref.rod_L0[1] = length;
+    CHASSIS.ref.rod_dL0[0] = 0.0f;
+    CHASSIS.ref.rod_dL0[1] = 0.0f;
     CHASSIS.ref.rod_Angle[0] = angle;
     CHASSIS.ref.rod_Angle[1] = angle;
 
@@ -1982,7 +1986,7 @@ static void LocomotionController_Tripod(void)
 }
 
 /**
- * @brief      运动控制器 尾巴离地模式Pro版
+ * @brief      运动控制器 尾巴离地模式Pro版 现在正使用的版本
  */
 static void LocomotionController_Pro_Bipedal(void)
 {
@@ -2033,7 +2037,7 @@ static void LocomotionController_Pro_Bipedal(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    float L_diff = CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
 
     // float e_beta = CHASSIS.ref.tail_state.beta - CHASSIS.fdb.tail_state.beta;
     // float tail_z_comp;

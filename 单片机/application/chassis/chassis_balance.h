@@ -194,6 +194,7 @@ typedef struct
     LegState_t leg_state[2];  // 0-左 1-右
     TailState_t tail_state;   // 期望尾巴状态
     float rod_L0[2];          // 0-左 1-右 杆长期望
+    float rod_dL0[2];         // 0-左 1-右 杆长变化率期望
     float rod_Angle[2];       // 0-左 1-右 杆角期望
     ChassisSpeedVector_t speed_vector;  // 期望速度向量
 } Ref_t;
