@@ -17,6 +17,8 @@
 #define ROBOT_MOTION_DATA_SEND_ID ((uint8_t)0x08)
 #define ROBOT_TARGET_DATA_SEND_ID ((uint8_t)0x0B)
 #define TORQUE_DATA_SEND_ID       ((uint8_t)0x0C)
+#define MOTOR_ERROR_SEND_ID       ((uint8_t)0x0D)
+#define MOTOR_ANGLE_SEND_ID       ((uint8_t)0x0E)
 
 #define ROBOT_CMD_DATA_RECEIVE_ID  ((uint8_t)0x01)
 #define VIRTUAL_RC_DATA_RECEIVE_ID ((uint8_t)0x03)
@@ -151,6 +153,30 @@ typedef struct
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataTorque_s;
+
+// 电机离线错误数据包
+typedef struct
+{
+    FrameHeader_t frame_header;  // 数据段id = 0x0D
+    uint32_t time_stamp;
+    uint8_t  offline_mask;       // bit0~3: J0~J3关节, bit4~5: W0~W1轮子, bit6: 尾巴
+    uint8_t  reserved[3];
+    uint16_t crc;
+} __packed__ SendDataMotorError_s;
+
+// 电机角度数据包
+typedef struct
+{
+    FrameHeader_t frame_header;  // 数据段id = 0x0E
+    uint32_t time_stamp;
+    struct
+    {
+        float joint[4];   // rad J0~J3 髋关节
+        float wheel[2];   // rad W0~W1 轮子
+        float tail;       // rad Tail 尾巴
+    } __packed__ data;
+    uint16_t crc;
+} __packed__ SendDataMotorAngle_s;
 
 /*-------------------- Receive --------------------*/
 typedef struct RobotCmdData

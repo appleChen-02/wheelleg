@@ -8,6 +8,13 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 %   log = read_usb_log("C:\\path\\to\\log", 1.0, [0 90])  % time window in seconds
 %
 % The script expects the Python logger output files in the directory:
+
+
+
+
+
+
+
 %   - imu.csv
 %   - robot_motion.csv
 %   - robot_target.csv
@@ -49,6 +56,8 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
     motionFile = fullfile(logDir, 'robot_motion.csv');
     targetFile = fullfile(logDir, 'robot_target.csv');
     torqueFile = fullfile(logDir, 'torque.csv');
+    motorAngleFile = fullfile(logDir, 'motor_angle.csv');
+    motorErrorFile = fullfile(logDir, 'motor_error.csv');
     unknownFile = fullfile(logDir, 'unknown_frames.csv');
     matFile = fullfile(logDir, 'usb_log.mat');
 
@@ -74,6 +83,18 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
         log.torque = readtable(torqueFile, 'VariableNamingRule', 'preserve');
     else
         log.torque = table();
+    end
+
+    if isfile(motorAngleFile)
+        log.motor_angle = readtable(motorAngleFile, 'VariableNamingRule', 'preserve');
+    else
+        log.motor_angle = table();
+    end
+
+    if isfile(motorErrorFile)
+        log.motor_error = readtable(motorErrorFile, 'VariableNamingRule', 'preserve');
+    else
+        log.motor_error = table();
     end
 
     if isfile(unknownFile)
@@ -113,11 +134,17 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
     % 控制力矩：右髋/左髋/右轮/左轮/尾巴 五图同窗
     plot_torque_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
 
+    % 电机角度：J0~J3髋关节 + W0~W1轮子 + Tail尾巴 七图同窗
+    plot_motor_angles_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
+
     % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
     %animate_actual_trajectory(log, playbackSpeed, axisLabelFontSize, tickFontSize);
 
     % 根据线速度/角速度积分得到平面轨迹，并对比目标与实际
     plot_target_state_trajectory(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
+
+    % 绘制各通道 Bode 图（闭环频率响应：目标 → 状态）
+    plot_bode_channels(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
 end
 
 function plot_target_state_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
@@ -319,6 +346,63 @@ function plot_torque_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount
         ylabel(sprintf('%s (N*m)', torqueNames{i}), 'FontSize', axisLabelFontSize);
         if i == 5
             xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize);
+        end
+    end
+end
+
+function plot_motor_angles_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
+    if ~isfield(log, 'motor_angle') || isempty(log.motor_angle)
+        return;
+    end
+
+    requiredVars = {'host_time_s', 'J0_pos', 'J1_pos', 'J2_pos', 'J3_pos', ...
+                    'W0_pos', 'W1_pos', 'Tail_pos'};
+    if ~all(ismember(requiredVars, log.motor_angle.Properties.VariableNames))
+        return;
+    end
+
+    tAngle = double(log.motor_angle.host_time_s(:));
+    t0 = first_finite_time(tAngle);
+    if ~isfinite(t0)
+        t0 = 0;
+    end
+    tAngle = tAngle - t0;
+
+    f = create_plot_figure('Motor Angles (J0-J3 / W0-W1 / Tail)', figurePosition, baseTickCount);
+    tlo = tiledlayout(f, 7, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, 'Motor Shaft Angles (raw encoder)');
+
+    angleFields = {'J0_pos', 'J1_pos', 'J2_pos', 'J3_pos', 'W0_pos', 'W1_pos', 'Tail_pos'};
+    angleLabels = {'J0 (left front hip) rad', 'J1 (left rear hip) rad', ...
+                   'J2 (right front hip) rad', 'J3 (right rear hip) rad', ...
+                   'W0 (left wheel) rad', 'W1 (right wheel) rad', ...
+                   'Tail rad'};
+    lineColors = lines(7);
+
+    for i = 1:7
+        ax = nexttile;
+        plot(tAngle, log.motor_angle.(angleFields{i}), ...
+             'Color', lineColors(i,:), 'LineWidth', 1.0);
+        grid on;
+        style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true);
+        ylabel(angleLabels{i}, 'FontSize', axisLabelFontSize);
+        if i == 7
+            xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize);
+        end
+    end
+
+    % 叠加离线标记（若有 motor_error.csv）
+    if isfield(log, 'motor_error') && ~isempty(log.motor_error) && ...
+       ismember('host_time_s', log.motor_error.Properties.VariableNames)
+        tErr = double(log.motor_error.host_time_s(:)) - t0;
+        for i = 1:7
+            ax = nexttile(i);
+            hold(ax, 'on');
+            yl = ylim(ax);
+            for k = 1:length(tErr)
+                xline(ax, tErr(k), 'r-', 'LineWidth', 0.3, 'Alpha', 0.3);
+            end
+            ylim(ax, yl);
         end
     end
 end
@@ -612,7 +696,7 @@ end
 
 function timeOrigin = get_log_time_origin(log)
     timeOrigin = NaN;
-    candidateFields = {'robot_motion', 'robot_target', 'imu', 'torque', 'unknown_frames'};
+    candidateFields = {'robot_motion', 'robot_target', 'imu', 'torque', 'motor_angle', 'motor_error', 'unknown_frames'};
     for idx = 1:numel(candidateFields)
         fieldName = candidateFields{idx};
         if isfield(log, fieldName)
@@ -636,7 +720,7 @@ function timeOrigin = get_log_time_origin(log)
 end
 
 function log = apply_time_range_filter(log, timeRange, timeOrigin)
-    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'unknown_frames'};
+    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'motor_angle', 'motor_error', 'unknown_frames'};
     for idx = 1:numel(filterFields)
         fieldName = filterFields{idx};
         if ~isfield(log, fieldName)
@@ -715,5 +799,260 @@ function t0 = first_finite_time(t)
         t0 = NaN;
     else
         t0 = t(idx);
+    end
+end
+
+% =========================================================================
+%  Bode 图绘制（闭环频率响应：target → motion）
+% =========================================================================
+
+function plot_bode_channels(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
+    %PLOT_BODE_CHANNELS 绘制各通道闭环 Bode 图（目标 → 状态）
+    %
+    % 使用 MCU 端 tick_ms (HAL_GetTick) 作为时间基准，重采样至均匀网格后，
+    % 通过 tfestimate (Welch 平均周期图法) 估计各通道的闭环频率响应。
+    %
+    % 绘制通道分组：
+    %   Group 1 - 速度跟踪  : vx, vy, wz
+    %   Group 2 - 姿态跟踪  : body_roll, body_pitch, body_yaw
+    %   Group 3 - 腿长与尾巴: leg0_legx, leg1_legx, tail_beta
+    %
+    % 不建议绘制 Bode 图的通道（内部运动学状态 / 导数冗余量 / 积分量）：
+    %   tail_beta_dot, body_x,
+    %   leg0_phi, leg0_phi_dot, leg0_legx_dot, leg0_theta, leg0_theta_dot,
+    %   leg1_phi, leg1_phi_dot, leg1_legx_dot, leg1_theta, leg1_theta_dot
+
+    if ~exist('tfestimate', 'file')
+        warning('Bode: Signal Processing Toolbox required for tfestimate. Skipping Bode plots.');
+        return;
+    end
+
+    if ~isfield(log, 'robot_motion') || ~isfield(log, 'robot_target')
+        return;
+    end
+    if isempty(log.robot_motion) || isempty(log.robot_target)
+        return;
+    end
+
+    % ---- 参数 ----
+    Fs = 100;            % 重采样频率 (Hz)，匹配 MCU 10 ms 发送间隔
+    Nfft = 512;          % FFT 点数，频率分辨率 ≈ 0.2 Hz，窗口 ≈ 5.1 s
+    window = hann(Nfft);
+    noverlap = Nfft / 2; % 50% overlap
+
+    % ---- 获取时间戳：优先 MCU tick_ms (1 ms 精度)，备选 host_time_s ----
+    motionVars = log.robot_motion.Properties.VariableNames;
+    targetVars = log.robot_target.Properties.VariableNames;
+    useTickMs = ismember('tick_ms', motionVars) && ismember('tick_ms', targetVars);
+
+    if useTickMs
+        t_target_raw = double(log.robot_target.tick_ms(:));
+        t_motion_raw = double(log.robot_motion.tick_ms(:));
+    else
+        t_target_raw = double(log.robot_target.host_time_s(:));
+        t_motion_raw = double(log.robot_motion.host_time_s(:));
+        Fs = 50;  % host_time_s 存在 USB/OS 抖动，降低重采样率
+    end
+
+    % ---- 构建均匀时间网格 ----
+    [t_uniform, t_target_s, t_motion_s] = bode_build_uniform_grid(...
+        t_target_raw, t_motion_raw, Fs, useTickMs);
+
+    if isempty(t_uniform) || length(t_uniform) < Nfft
+        warning('Bode: insufficient data length for tfestimate (have %d pts, need >%d).', ...
+            length(t_uniform), Nfft);
+        return;
+    end
+
+    % 有效分析频段提示
+    fprintf('[Bode] 时间基准: %s, Fs=%.0f Hz, Nfft=%d, 有效分析频段 ≈ 0.2–%.0f Hz\n', ...
+        condstr(useTickMs, 'tick_ms (MCU)', 'host_time_s (PC)'), Fs, Nfft, Fs/3);
+
+    % ---- 通道分组定义 ----
+    groups = {...
+        struct('channels', {{'vx', 'vy', 'wz'}}, ...
+               'labels',   {{'v_x (m/s)', 'v_y (m/s)', '\omega_z (rad/s)'}}, ...
+               'title',    'Velocity Tracking Bode (target \rightarrow state)'), ...
+        struct('channels', {{'body_roll', 'body_pitch', 'body_yaw'}}, ...
+               'labels',   {{'Roll (rad)', 'Pitch (rad)', 'Yaw (rad)'}}, ...
+               'title',    'Attitude Tracking Bode (target \rightarrow state)'), ...
+        struct('channels', {{'leg0_legx', 'leg1_legx', 'tail_beta'}}, ...
+               'labels',   {{'L_0 leg length (m)', 'L_1 leg length (m)', '\beta_{tail} (rad)'}}, ...
+               'title',    'Leg & Tail Tracking Bode (target \rightarrow state)') ...
+    };
+
+    % Bode 图 3 列，需要比默认更宽的图窗
+    bodePos = figurePosition;
+    bodePos(3) = max(bodePos(3), 1800);
+
+    for g = 1:length(groups)
+        group = groups{g};
+        bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
+            Fs, Nfft, window, noverlap, bodePos, ...
+            axisLabelFontSize, tickFontSize, baseTickCount, useTickMs);
+    end
+end
+
+% -------------------------------------------------------------------------
+function [t_uniform, t_target_s, t_motion_s] = ...
+        bode_build_uniform_grid(t_target_raw, t_motion_raw, Fs, useTickMs)
+    % 从两个非均匀时间向量构建统一的均匀时间网格
+
+    % 取交集时间窗口
+    t0 = max(first_finite_time(t_target_raw), first_finite_time(t_motion_raw));
+    t_end_raw = min(max(t_target_raw), max(t_motion_raw));
+
+    if ~isfinite(t0) || ~isfinite(t_end_raw) || t_end_raw <= t0
+        t_uniform = [];
+        t_target_s = [];
+        t_motion_s = [];
+        return;
+    end
+
+    % 转为秒并相对 t0
+    if useTickMs
+        % tick_ms: HAL_GetTick() 单位是 ms → 转为 s
+        scale = 1000;
+    else
+        % host_time_s: 已经是 s
+        scale = 1;
+    end
+
+    t_target_s = (t_target_raw - t0) / scale;
+    t_motion_s = (t_motion_raw - t0) / scale;
+
+    t_max = min(max(t_target_s), max(t_motion_s));
+    t_uniform = (0 : 1/Fs : t_max)';
+end
+
+% -------------------------------------------------------------------------
+function bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
+        Fs, Nfft, window, noverlap, figurePosition, ...
+        axisLabelFontSize, tickFontSize, baseTickCount, useTickMs)
+
+    nCh = length(group.channels);
+
+    f = figure('Name', group.title, 'Color', 'w', 'Position', figurePosition);
+
+    timeLabel = condstr(useTickMs, 'tick_{ms}', 'host\_time_s');
+    tlo = tiledlayout(f, 2, nCh, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, sprintf('%s  [Fs=%.0f Hz, N_{fft}=%d, t_{src}=%s]', ...
+        group.title, Fs, Nfft, timeLabel), 'FontSize', axisLabelFontSize);
+
+    for ch = 1:nCh
+        chName = group.channels{ch};
+        chLabel = group.labels{ch};
+
+        % ---- 检查列名是否存在 ----
+        if ~ismember(chName, log.robot_motion.Properties.VariableNames) || ...
+           ~ismember(chName, log.robot_target.Properties.VariableNames)
+            ax = nexttile; text(0.5, 0.5, sprintf('%s: missing', chName), ...
+                'HorizontalAlign', 'center', 'FontSize', tickFontSize); axis(ax, 'off');
+            ax = nexttile; text(0.5, 0.5, sprintf('%s: missing', chName), ...
+                'HorizontalAlign', 'center', 'FontSize', tickFontSize); axis(ax, 'off');
+            continue;
+        end
+
+        u_raw = double(log.robot_target.(chName)(:));
+        y_raw = double(log.robot_motion.(chName)(:));
+
+        % ---- 分别插值到同一均匀网格 ----
+        u_uniform = interp1(t_target_s, u_raw, t_uniform, 'linear');
+        y_uniform = interp1(t_motion_s, y_raw, t_uniform, 'linear');
+
+        % ---- 清理 NaN / Inf ----
+        valid = isfinite(u_uniform) & isfinite(y_uniform);
+        if sum(valid) < Nfft
+            ax = nexttile; text(0.5, 0.5, sprintf('data < %d pts', Nfft), ...
+                'HorizontalAlign', 'center', 'FontSize', tickFontSize); axis(ax, 'off');
+            ax = nexttile; text(0.5, 0.5, sprintf('data < %d pts', Nfft), ...
+                'HorizontalAlign', 'center', 'FontSize', tickFontSize); axis(ax, 'off');
+            continue;
+        end
+
+        u_clean = u_uniform(valid);
+        y_clean = y_uniform(valid);
+
+        % ---- tfestimate: Welch 平均周期图法 ----
+        [Txy, f] = tfestimate(u_clean, y_clean, window, noverlap, Nfft, Fs);
+
+        mag_dB = 20 * log10(max(abs(Txy), eps));
+        phase_deg = unwrap(angle(Txy)) * 180 / pi;
+
+        % ---- 提取 -3 dB 带宽 ----
+        idx_3dB = find(mag_dB <= -3, 1, 'first');
+        bw_str = '';
+        bw_freq = NaN;
+        if ~isempty(idx_3dB) && idx_3dB > 1
+            bw_freq = f(idx_3dB);
+            if isfinite(bw_freq) && bw_freq > f(2) && bw_freq < Fs/3
+                bw_str = sprintf('  |  -3dB @ %.1f Hz', bw_freq);
+            end
+        end
+
+        % ---- 低频平均增益 (0.2–1.0 Hz) ----
+        mask_low = f > 0.2 & f < 1.0;
+        low_gain_str = '';
+        if any(mask_low)
+            avg_low = mean(mag_dB(mask_low & isfinite(mag_dB)));
+            if isfinite(avg_low)
+                low_gain_str = sprintf('G_0≈%.1f dB  ', avg_low);
+            end
+        end
+
+        % ---- 幅频子图 (上排) ----
+        ax_mag = nexttile;
+        semilogx(ax_mag, f, mag_dB, 'b-', 'LineWidth', 1.2);
+        hold(ax_mag, 'on');
+        yline(ax_mag, 0,  'k--', 'LineWidth', 0.6);   % 0 dB 参考线
+        yline(ax_mag, -3, 'r--', 'LineWidth', 0.6);   % -3 dB 带宽线
+
+        if ~isnan(bw_freq)
+            xline(ax_mag, bw_freq, 'r--', 'LineWidth', 0.8);
+        end
+
+        grid(ax_mag, 'on');
+        ylabel(ax_mag, 'Magnitude (dB)', 'FontSize', axisLabelFontSize);
+        title(ax_mag, sprintf('%s  [%s%s]', chLabel, low_gain_str, bw_str), ...
+            'FontSize', axisLabelFontSize - 2);
+        set(ax_mag, 'FontSize', tickFontSize);
+
+        % 限制 y 范围避免受极低频噪声影响
+        yl_mag = ylim(ax_mag);
+        ylim(ax_mag, [max(yl_mag(1), -40), min(yl_mag(2), 10)]);
+
+        % ---- 相频子图 (下排) ----
+        ax_phase = nexttile;
+        semilogx(ax_phase, f, phase_deg, 'b-', 'LineWidth', 1.2);
+        hold(ax_phase, 'on');
+        yline(ax_phase, 0,   'k--', 'LineWidth', 0.6);
+        yline(ax_phase, -90,  'k:', 'LineWidth', 0.5);
+        yline(ax_phase, -180, 'k:', 'LineWidth', 0.5);
+
+        % 自动扩展 y 范围，至少覆盖 [-360, 90]
+        yl_phase = ylim(ax_phase);
+        ylim(ax_phase, [min(yl_phase(1), -360), max(yl_phase(2), 90)]);
+
+        grid(ax_phase, 'on');
+        xlabel(ax_phase, 'Frequency (Hz)', 'FontSize', axisLabelFontSize);
+        ylabel(ax_phase, 'Phase (deg)', 'FontSize', axisLabelFontSize);
+        set(ax_phase, 'FontSize', tickFontSize);
+    end
+
+    % 链接所有子图的 x 轴 (频率轴)
+    if isgraphics(f, 'figure')
+        allAxes = findobj(f, 'Type', 'Axes');
+        if numel(allAxes) >= 2
+            linkaxes(allAxes, 'x');
+        end
+    end
+end
+
+% -------------------------------------------------------------------------
+function s = condstr(condition, trueStr, falseStr)
+    if condition
+        s = trueStr;
+    else
+        s = falseStr;
     end
 end

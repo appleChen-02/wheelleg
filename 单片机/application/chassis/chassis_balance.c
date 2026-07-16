@@ -51,6 +51,10 @@
 #define VX_REF_ALPHA 0.12f
 #define TAIL_BETA_ALPHA 0.15f
 
+// 电机离线掩码，供 USB 任务读取
+// bit0~3: J0~J3关节, bit4~5: W0~W1轮子, bit6: 尾巴
+uint8_t g_motor_offline_mask = 0;
+
 // Parameters on ---------------------
 #define MS_TO_S 0.001f
 
@@ -406,50 +410,6 @@ static void ResetXStateOnModeSwitch(void)
  * @param[in]      none
  * @retval         none
  */
-// void ChassisSetMode(void)
-// {
-//     if (CHASSIS.error_code & DBUS_ERROR_OFFSET) {  // 遥控器出错时的状态处理
-//         CHASSIS.mode = CHASSIS_SAFE;
-//         return;
-//     }
-
-//     if (CHASSIS.error_code & IMU_ERROR_OFFSET) {  // IMU出错时的状态处理
-//         CHASSIS.mode = CHASSIS_SAFE;
-//         return;
-//     }
-
-//     if (CHASSIS.error_code & JOINT_ERROR_OFFSET) {  // 关节电机出错时的状态处理
-//         CHASSIS.mode = CHASSIS_SAFE;
-//         return;
-//     }
-// #if TAKE_OFF_DETECT
-//     // 离地状态切换
-//     for (uint8_t i = 0; i < 2; i++) {
-//         if (CHASSIS.fdb.leg[i].is_take_off &&
-//             CHASSIS.fdb.leg[i].touch_time > TOUCH_TOGGLE_THRESHOLD) {
-//             CHASSIS.fdb.leg[i].is_take_off = false;
-//         } else if (
-//             !CHASSIS.fdb.leg[i].is_take_off &&
-//             CHASSIS.fdb.leg[i].take_off_time > TOUCH_TOGGLE_THRESHOLD) {
-//             CHASSIS.fdb.leg[i].is_take_off = true;
-//         }
-//     }
-// #endif
-
-//     if (switch_is_up(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL]))
-//         CHASSIS.mode =
-//             CHASSIS_NOTAIL;  //后面可以变成多体，改改lqr输入变量就行，因为这个模式尾巴相当于没有
-//     else if (switch_is_mid(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL])) {
-//         if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_FUNCTION]))
-//             CHASSIS.mode = CHASSIS_BIPEDAL;
-//         else if (
-//             switch_is_up(CHASSIS.rc->rc.s[CHASSIS_FUNCTION]) ||
-//             switch_is_mid(CHASSIS.rc->rc.s[CHASSIS_FUNCTION])) {
-//             CHASSIS.mode = CHASSIS_TRIPOD;
-//         }
-//     } else if (switch_is_down(CHASSIS.rc->rc.s[CHASSIS_MODE_CHANNEL]))
-//         CHASSIS.mode = CHASSIS_JOINED;
-// }
 void ChassisSetMode(void)
 {
     static int16_t prev_mode_sw  = 0;  // 上一次 CHASSIS_MODE_CHANNEL 值
@@ -537,15 +497,29 @@ void ChassisObserver(void)
  */
 static void UpdateMotorStatus(void)
 {
+    g_motor_offline_mask = 0;
+
     for (uint8_t i = 0; i < 4; i++) {
         GetMotorMeasure(&CHASSIS.joint_motor[i]);
+        CHASSIS.fdb.motor_pos[i] = CHASSIS.joint_motor[i].fdb.pos;
+        if (CHASSIS.joint_motor[i].offline) {
+            g_motor_offline_mask |= (1 << i);
+        }
     }
 
     for (uint8_t i = 0; i < 2; i++) {
         GetMotorMeasure(&CHASSIS.wheel_motor[i]);
+        CHASSIS.fdb.motor_pos[4 + i] = CHASSIS.wheel_motor[i].fdb.pos;
+        if (CHASSIS.wheel_motor[i].offline) {
+            g_motor_offline_mask |= (1 << (4 + i));
+        }
     }
 
     GetMotorMeasure(&CHASSIS.tail_motor);
+    CHASSIS.fdb.motor_pos[6] = CHASSIS.tail_motor.fdb.pos;
+    if (CHASSIS.tail_motor.offline) {
+        g_motor_offline_mask |= (1 << 6);
+    }
 }
 
 static void UpdateBodyStatus(void)  //主要是imu和磁力计那些
@@ -1318,19 +1292,19 @@ void ChassisReference(void)
         } break;
         case CHASSIS_BIPEDAL: {  //尾巴离地 位置控制
             length = 0.18f + rc_length * RC_TO_ONE * 0.1f;
-            angle = rc_angle * RC_TO_ONE * 0.3f;  // 待改正，引入重心调节
             // angle = 0.0f;  // 加入质心调节，尾巴上摆，腿往后撤维持重心在同一竖直位置
             // tail_angle = Get_beta_ref(length_fdb, angle_fdb, CHASSIS.fdb.body.pitch) -
             //              rc_tail * RC_TO_ONE * 0.4f;
-            tail_angle = Get_beta(
-                             CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg_state[0].theta,
-                             CHASSIS.fdb.leg[1].rod.L0, CHASSIS.fdb.leg_state[1].theta,
-                             CHASSIS.fdb.body.pitch) -
-                         rc_tail * RC_TO_ONE * 0.4f;
+            // tail_angle = Get_beta(
+            //                  CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg_state[0].theta,
+            //                  CHASSIS.fdb.leg[1].rod.L0, CHASSIS.fdb.leg_state[1].theta,
+            //                  CHASSIS.fdb.body.pitch) -
+            //              rc_tail * RC_TO_ONE * 0.4f;
             // if (last_mode == CHASSIS_TRIPOD) {
             //     CHASSIS.fdb.body.x = 0.0f;
             //     last_mode = CHASSIS_BIPEDAL;
             // }
+            tail_angle = rc_tail * RC_TO_ONE;
         } break;
         default: {
             angle = 0;
@@ -2206,7 +2180,8 @@ static void LegTorqueController(void)
         if (CHASSIS.step == JUMP_STEP_JUMP) {
             // 直接给一个超大力F起飞
             CHASSIS.cmd.leg[i].rod.F = 40;
-        } else {
+        } 
+        else {
             // 计算前馈力
             switch (CHASSIS.mode) {
                 case CHASSIS_TRIPOD: {

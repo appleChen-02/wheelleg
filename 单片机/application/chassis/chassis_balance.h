@@ -182,6 +182,7 @@ typedef struct
     Tail_t tail;              // 尾巴状态
     TailState_t tail_state;    // 尾巴状态量
     ChassisSpeedVector_t speed_vector;  // 底盘速度向量
+    float motor_pos[7];           // rad 电机实时角度: [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
     float torque[5];            // N*m 控制力矩输出: [0]=T_r_to_b(右髋), [1]=T_l_to_b(左髋), [2]=T_wr_to_r(右轮), [3]=T_wl_to_l(左轮), [4]=T_t_to_b(尾)
 } Fdb_t;
 
@@ -337,6 +338,9 @@ extern void ChassisSetMode(void);
 extern void ChassisObserver(void);
 // 生成本周期参考量
 extern void ChassisReference(void);
+// 电机离线掩码（供 USB 任务读取）
+extern uint8_t g_motor_offline_mask;
+
 // 控制台/调试输出
 extern void ChassisConsole(void);
 // 将控制量发送到电机驱动

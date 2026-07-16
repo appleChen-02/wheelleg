@@ -879,6 +879,220 @@ for i = 1:n_q
 end
 
 %% ========================================================================
+%  Phase 7: 状态空间 A, B_ss 矩阵 (dx = A*x + B_ss*u)
+%  ========================================================================
+
+fprintf('\n========================================\n');
+fprintf('Phase 7: 状态空间 A, B_ss 矩阵\n');
+fprintf('========================================\n\n');
+
+fprintf('  状态向量 x = [q; dq] (12x1)\n');
+fprintf('  控制输入 u = [T_hip_r; T_hip_l; T_motor_wr; T_motor_wl; T_tail] (5x1)\n');
+fprintf('  系统形式: dx = A*x + B_ss*u\n');
+fprintf('  线性化原理:\n');
+fprintf('    ddq = M^{-1} * (B*u - g)\n');
+fprintf('    A = [0_{6x6},       I_{6x6};\n');
+fprintf('         -M^{-1}*Jg_q,  -M^{-1}*Jg_dq]\n');
+fprintf('    B_ss = [0_{6x5}; M^{-1}*B]\n');
+fprintf('  线性化点: dq=0, 测试姿态, u=0\n\n');
+
+% ----- 7.1 符号Jacobian -----
+fprintf('  Step 7.1: 计算符号 Jacobian ∂g/∂q 和 ∂g/∂dq...\n');
+
+% 拉格朗日法
+Jg_q_Lag = jacobian(g_Lag_sym, q);    % 6×6
+Jg_dq_Lag = jacobian(g_Lag_sym, dq);  % 6×6
+
+% NE法
+Jg_q_NE = jacobian(g_NE_sym, q);
+Jg_dq_NE = jacobian(g_NE_sym, dq);
+
+fprintf('    完成\n\n');
+
+% ----- 7.2 数值代入 -----
+fprintf('  Step 7.2: 数值代入...\n');
+
+Jg_q_Lag_num = double(subs(subs(Jg_q_Lag, param_subs_num(:,1), param_subs_num(:,2)), ...
+    state_subs_num(:,1), state_subs_num(:,2)));
+Jg_dq_Lag_num = double(subs(subs(Jg_dq_Lag, param_subs_num(:,1), param_subs_num(:,2)), ...
+    state_subs_num(:,1), state_subs_num(:,2)));
+
+Jg_q_NE_num = double(subs(subs(Jg_q_NE, param_subs_num(:,1), param_subs_num(:,2)), ...
+    state_subs_num(:,1), state_subs_num(:,2)));
+Jg_dq_NE_num = double(subs(subs(Jg_dq_NE, param_subs_num(:,1), param_subs_num(:,2)), ...
+    state_subs_num(:,1), state_subs_num(:,2)));
+
+M_Lag_inv_num = inv(M_Lag_num);
+M_NE_inv_num  = inv(M_NE_num);
+
+fprintf('    完成\n\n');
+
+% ----- 7.3 构造 A 矩阵 -----
+fprintf('  Step 7.3: 构造 A 矩阵 (12×12)...\n');
+
+% 拉格朗日法
+A_Lag = zeros(12, 12);
+A_Lag(1:6, 7:12) = eye(6);
+A_Lag(7:12, 1:6) = -M_Lag_inv_num * Jg_q_Lag_num;
+A_Lag(7:12, 7:12) = -M_Lag_inv_num * Jg_dq_Lag_num;
+
+% NE法
+A_NE = zeros(12, 12);
+A_NE(1:6, 7:12) = eye(6);
+A_NE(7:12, 1:6) = -M_NE_inv_num * Jg_q_NE_num;
+A_NE(7:12, 7:12) = -M_NE_inv_num * Jg_dq_NE_num;
+
+% ----- 7.4 构造 B_ss 矩阵 -----
+fprintf('  Step 7.4: 构造 B_ss 矩阵 (12×5)...\n');
+
+B_ss_Lag = zeros(12, 5);
+B_ss_Lag(7:12, :) = M_Lag_inv_num * B_Lag_num;
+
+B_ss_NE = zeros(12, 5);
+B_ss_NE(7:12, :) = M_NE_inv_num * B_NE_num;
+
+fprintf('    完成\n\n');
+
+% ----- 7.5 数值输出 -----
+q_labels  = {'X_b_h','phi','theta_l','theta_r','theta_b','theta_t'};
+dq_labels = {'dX_b_h','dphi','dtheta_l','dtheta_r','dtheta_b','dtheta_t'};
+u_labels  = {'T_hip_r','T_hip_l','T_wr','T_wl','T_tail'};
+
+% --- A 矩阵 ---
+fprintf('═══════════════════════════════════════════\n');
+fprintf('  A 矩阵 (12×12)\n');
+fprintf('  行/列: X_b_h, φ, θ_l, θ_r, θ_b, θ_t | dX_b_h, dφ, dθ_l, dθ_r, dθ_b, dθ_t\n');
+fprintf('═══════════════════════════════════════════\n\n');
+
+fprintf('--- 拉格朗日法 A 矩阵 ---\n');
+fprintf('  A = [0_{6x6} | I_{6x6}]\n');
+fprintf('      [-M\\Jg_q  | -M\\Jg_dq]\n\n');
+fprintf('  A(1:6, 1:6) = 0_{6x6}\n');
+fprintf('  A(1:6, 7:12) = I_{6x6}\n\n');
+fprintf('  A(7:12, 1:6) = -M^{-1} * ∂g/∂q :\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:6
+        fprintf('%10.4f ', A_Lag(i+6, j));
+    end
+    fprintf('\n');
+end
+fprintf('\n  A(7:12, 7:12) = -M^{-1} * ∂g/∂dq :\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:6
+        fprintf('%10.4f ', A_Lag(i+6, j+6));
+    end
+    fprintf('\n');
+end
+
+fprintf('\n--- NE 法 A 矩阵 ---\n');
+fprintf('  A(7:12, 1:6) = -M^{-1} * ∂g/∂q :\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:6
+        fprintf('%10.4f ', A_NE(i+6, j));
+    end
+    fprintf('\n');
+end
+fprintf('\n  A(7:12, 7:12) = -M^{-1} * ∂g/∂dq :\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:6
+        fprintf('%10.4f ', A_NE(i+6, j+6));
+    end
+    fprintf('\n');
+end
+
+A_num_diff = A_Lag - A_NE;
+fprintf('\n--- A 差异 (Lagrange - NE), ||diff||_inf = %.4e ---\n', norm(A_num_diff, 'inf'));
+fprintf('  A(7:12, 1:6) 块差异:\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:6
+        fprintf('%10.2e ', A_num_diff(i+6, j));
+    end
+    fprintf('\n');
+end
+fprintf('  A(7:12, 7:12) 块差异:\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:6
+        fprintf('%10.2e ', A_num_diff(i+6, j+6));
+    end
+    fprintf('\n');
+end
+
+% --- 特征值 ---
+fprintf('\n--- A 矩阵特征值 ---\n');
+eig_A_Lag = eig(A_Lag);
+eig_A_NE  = eig(A_NE);
+fprintf('  %4s | %14s %14s | %14s %14s\n', 'No.', 'Re(Lag)', 'Im(Lag)', 'Re(NE)', 'Im(NE)');
+fprintf('  -----|---------------|---------------|---------------|---------------\n');
+for i = 1:12
+    fprintf('  %4d | %14.6f %14.6f | %14.6f %14.6f\n', ...
+        i, real(eig_A_Lag(i)), imag(eig_A_Lag(i)), ...
+        real(eig_A_NE(i)), imag(eig_A_NE(i)));
+end
+
+% --- B_ss 矩阵 ---
+fprintf('\n═══════════════════════════════════════════\n');
+fprintf('  B_ss 矩阵 (12×5, 列 = T_hip_r, T_hip_l, T_motor_wr, T_motor_wl, T_tail)\n');
+fprintf('═══════════════════════════════════════════\n\n');
+
+fprintf('--- 拉格朗日法 B_ss 矩阵 ---\n');
+fprintf('  B_ss = [0_{6x5}; M^{-1}*B]\n\n');
+fprintf('  B_ss(7:12, :) :\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:5
+        fprintf('%10.4f ', B_ss_Lag(i+6, j));
+    end
+    fprintf('\n');
+end
+
+fprintf('\n--- NE 法 B_ss 矩阵 ---\n');
+fprintf('  B_ss(7:12, :) :\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:5
+        fprintf('%10.4f ', B_ss_NE(i+6, j));
+    end
+    fprintf('\n');
+end
+
+B_ss_num_diff = B_ss_Lag - B_ss_NE;
+fprintf('\n--- B_ss 差异 (Lagrange - NE), ||diff||_inf = %.4e ---\n', norm(B_ss_num_diff, 'inf'));
+fprintf('  B_ss(7:12, :) 块差异:\n');
+for i = 1:6
+    fprintf('  ');
+    for j = 1:5
+        fprintf('%10.2e ', B_ss_num_diff(i+6, j));
+    end
+    fprintf('\n');
+end
+
+% --- 能控性 ---
+fprintf('\n--- 能控性矩阵秩 ---\n');
+n_x = 12;
+Co_Lag = ctrb(A_Lag, B_ss_Lag);
+Co_NE  = ctrb(A_NE,  B_ss_NE);
+fprintf('  rank(Co)_Lag = %d / %d\n', rank(Co_Lag), n_x);
+fprintf('  rank(Co)_NE  = %d / %d\n', rank(Co_NE),  n_x);
+if rank(Co_Lag) == n_x
+    fprintf('  ✓ 拉格朗日法系统完全能控\n');
+else
+    fprintf('  ⚠ 拉格朗日法系统不完全能控 (缺失 %d 维)\n', n_x - rank(Co_Lag));
+end
+if rank(Co_NE) == n_x
+    fprintf('  ✓ NE法系统完全能控\n');
+else
+    fprintf('  ⚠ NE法系统不完全能控 (缺失 %d 维)\n', n_x - rank(Co_NE));
+end
+
+fprintf('\n  Phase 7 完成\n');
+
+%% ========================================================================
 %  保存结果
 %  ========================================================================
 
@@ -894,6 +1108,9 @@ save('comparison_results.mat', ...
     'g_NE_num', 'g_Lag_num', 'g_num_diff', ...
     'B_NE_num', 'B_Lag_num', 'B_num_diff', ...
     'diff_count_M', 'diff_count_g', 'diff_count_B', ...
+    'A_Lag', 'A_NE', 'A_num_diff', ...
+    'B_ss_Lag', 'B_ss_NE', 'B_ss_num_diff', ...
+    'Jg_q_Lag_num', 'Jg_dq_Lag_num', 'Jg_q_NE_num', 'Jg_dq_NE_num', ...
     'param_val', 'theta_l_test', 'theta_r_test');
 
 fprintf('  结果已保存到 comparison_results.mat\n');
@@ -904,6 +1121,7 @@ fprintf('          M_diff, g_diff, B_diff (符号差异)\n');
 fprintf('    数值: M_NE_num, M_Lag_num, M_num_diff\n');
 fprintf('          g_NE_num, g_Lag_num, g_num_diff\n');
 fprintf('          B_NE_num, B_Lag_num, B_num_diff\n');
+fprintf('    状态空间: A_Lag, A_NE, B_ss_Lag, B_ss_NE\n');
 fprintf('    差异计数: diff_count_M, g, B\n');
 
 fprintf('\n========================================\n');

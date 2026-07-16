@@ -506,19 +506,19 @@ fprintf('Part 10: 设置 LQR 权重\n');
 fprintf('========================================\n\n');
 
 % Q矩阵: 状态权重
-lqr_Q = diag([100, 100, ...
-              100, 100, ...
-              100, 25, ...
-              100, 25, ...
-              100, 25, ...
-              100, 49]);
+lqr_Q = diag([100*10, 100*50, ...
+              100*30, 100*20, ...
+              100*30, 25*20, ...
+              100*30, 25*20, ...
+              100*30, 25*8, ...
+              100*20, 49*30]);
 
 % R矩阵: 控制输入权重
 rho = 100; % 全局缩放因子，后续根据响应、饱和情况修改该数值即可
-hip_R = 0.000625;
-wheel_R = 0.0494;
-tail_R = 0.0204;
-lqr_R = rho * diag([hip_R, hip_R, wheel_R, wheel_R, tail_R*16*1.5]);
+hip_R = 0.000625*5;
+wheel_R = 0.0494*0.1;
+tail_R = 0.0204*3;
+lqr_R = rho * diag([hip_R, hip_R, wheel_R, wheel_R, tail_R]);
 
 fprintf('Q矩阵 (状态权重):\n');
 disp(lqr_Q);
@@ -551,6 +551,27 @@ try
 catch ME
     fprintf('✗ LQR计算失败: %s\n', ME.message);
     K = [];
+end
+
+%% ========================================
+%  Part 11b: 保存线性化模型 (供 plot_theoretical_bode 使用)
+%  ========================================
+
+if ~isempty(K)
+    % 生成带时间戳的文件名，支持多组参数调试
+    dateStr = datestr(now, 'yyyymmdd');
+    baseName = sprintf('lqr_linear_model_%s', dateStr);
+
+    % 自动递增编号，避免覆盖
+    idx = 1;
+    while isfile(sprintf('%s_%d.mat', baseName, idx))
+        idx = idx + 1;
+    end
+    saveName = sprintf('%s_%d.mat', baseName, idx);
+
+    save(saveName, 'A_num', 'B_num', 'K');
+    fprintf('✓ 线性化模型已保存: %s\n', saveName);
+    fprintf('  包含: A_num (12×12), B_num (12×5), K (5×12)\n\n');
 end
 
 %% ========================================
