@@ -203,8 +203,7 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
 
         nCh = length(groupChs);
         f = figure('Name', groupDefs{g}.title, 'Color', 'w', 'Position', figurePosition);
-        tlo = tiledlayout(f, 2, nCh, 'TileSpacing', 'compact', 'Padding', 'compact');
-        title(tlo, groupDefs{g}.title, 'FontSize', axisLabelFontSize);
+        sgtitle(groupDefs{g}.title, 'FontSize', axisLabelFontSize);
 
         for k = 1:nCh
             ch = groupChs{k};
@@ -212,7 +211,7 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
 
             if data.hasModel
                 % ==== 幅频图 ====
-                ax_mag = nexttile;
+                ax_mag = subplot(2, nCh, k);
                 semilogx(ax_mag, f_Hz, data.mag_dB, 'm-', 'LineWidth', 1.5);
                 hold(ax_mag, 'on');
                 yline(ax_mag, 0,  'k--', 'LineWidth', 0.6);
@@ -237,7 +236,7 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
                 ylim(ax_mag, [max(yl_mag(1), -60), min(yl_mag(2), 20)]);
 
                 % ==== 相频图 ====
-                ax_phase = nexttile;
+                ax_phase = subplot(2, nCh, nCh + k);
                 semilogx(ax_phase, f_Hz, data.phase_deg, 'm-', 'LineWidth', 1.5);
                 hold(ax_phase, 'on');
                 yline(ax_phase, 0,   'k--', 'LineWidth', 0.6);
@@ -253,12 +252,12 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
 
             else
                 % ==== 无模型的占位通道 ====
-                ax = nexttile;
+                ax = subplot(2, nCh, k);
                 text(0.5, 0.5, sprintf('%s\n(not in LQR model)', data.name), ...
                     'HorizontalAlign', 'center', 'FontSize', tickFontSize, ...
                     'Color', [0.5 0.5 0.5]);
                 axis(ax, 'off');
-                ax = nexttile;
+                ax = subplot(2, nCh, nCh + k);
                 text(0.5, 0.5, sprintf('%s\n(not in LQR model)', data.name), ...
                     'HorizontalAlign', 'center', 'FontSize', tickFontSize, ...
                     'Color', [0.5 0.5 0.5]);
@@ -266,10 +265,11 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             end
         end
 
-        % 链接频率轴
+        % 链接频率轴并限制显示范围至 Nyquist 频率 Fs/2
         allAxes = findobj(f, 'Type', 'Axes');
         if numel(allAxes) >= 2
             linkaxes(allAxes, 'x');
+            xlim(allAxes(1), [0.05, Fs/2]);
         end
     end
 

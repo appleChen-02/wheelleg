@@ -865,8 +865,8 @@ function plot_bode_channels(log, axisLabelFontSize, tickFontSize, baseTickCount,
     end
 
     % 有效分析频段提示
-    fprintf('[Bode] 时间基准: %s, Fs=%.0f Hz, Nfft=%d, 有效分析频段 ≈ 0.2–%.0f Hz\n', ...
-        condstr(useTickMs, 'tick_ms (MCU)', 'host_time_s (PC)'), Fs, Nfft, Fs/3);
+    fprintf('[Bode] 时间基准: %s, Fs=%.0f Hz, Nfft=%d, Nyquist=Fs/2=%.0f Hz, 显示频段 0.1–%.0f Hz\n', ...
+        condstr(useTickMs, 'tick_ms (MCU)', 'host_time_s (PC)'), Fs, Nfft, Fs/2, Fs/2);
 
     % ---- 通道分组定义 ----
     groups = {...
@@ -935,8 +935,7 @@ function bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
     f = figure('Name', group.title, 'Color', 'w', 'Position', figurePosition);
 
     timeLabel = condstr(useTickMs, 'tick_{ms}', 'host\_time_s');
-    tlo = tiledlayout(f, 2, nCh, 'TileSpacing', 'compact', 'Padding', 'compact');
-    title(tlo, sprintf('%s  [Fs=%.0f Hz, N_{fft}=%d, t_{src}=%s]', ...
+    sgtitle(sprintf('%s  [Fs=%.0f Hz, N_{fft}=%d, t_{src}=%s]', ...
         group.title, Fs, Nfft, timeLabel), 'FontSize', axisLabelFontSize);
 
     for ch = 1:nCh
@@ -985,7 +984,7 @@ function bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
         bw_freq = NaN;
         if ~isempty(idx_3dB) && idx_3dB > 1
             bw_freq = f(idx_3dB);
-            if isfinite(bw_freq) && bw_freq > f(2) && bw_freq < Fs/3
+            if isfinite(bw_freq) && bw_freq > f(2) && bw_freq < Fs/2
                 bw_str = sprintf('  |  -3dB @ %.1f Hz', bw_freq);
             end
         end
@@ -1001,7 +1000,7 @@ function bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
         end
 
         % ---- 幅频子图 (上排) ----
-        ax_mag = nexttile;
+        ax_mag = subplot(2, nCh, ch);
         semilogx(ax_mag, f, mag_dB, 'b-', 'LineWidth', 1.2);
         hold(ax_mag, 'on');
         yline(ax_mag, 0,  'k--', 'LineWidth', 0.6);   % 0 dB 参考线
@@ -1022,7 +1021,7 @@ function bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
         ylim(ax_mag, [max(yl_mag(1), -40), min(yl_mag(2), 10)]);
 
         % ---- 相频子图 (下排) ----
-        ax_phase = nexttile;
+        ax_phase = subplot(2, nCh, nCh + ch);
         semilogx(ax_phase, f, phase_deg, 'b-', 'LineWidth', 1.2);
         hold(ax_phase, 'on');
         yline(ax_phase, 0,   'k--', 'LineWidth', 0.6);
@@ -1039,11 +1038,12 @@ function bode_plot_one_group(log, group, t_target_s, t_motion_s, t_uniform, ...
         set(ax_phase, 'FontSize', tickFontSize);
     end
 
-    % 链接所有子图的 x 轴 (频率轴)
+    % 链接所有子图的 x 轴 (频率轴)，并限制显示范围至 Nyquist 频率 Fs/2
     if isgraphics(f, 'figure')
         allAxes = findobj(f, 'Type', 'Axes');
         if numel(allAxes) >= 2
             linkaxes(allAxes, 'x');
+            xlim(allAxes(1), [0.1, Fs/2]);
         end
     end
 end
