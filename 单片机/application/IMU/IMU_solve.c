@@ -258,9 +258,15 @@ static void IMU_QuaternionEKF_xhatUpdate(KalmanFilter_t *kf)
     }
     else
     {
-        // 应用渐消因子
-        kf->P_data[28] /= INS.lambda;
-        kf->P_data[35] /= INS.lambda;
+        // 应用渐消因子: 对全部6个状态(P对角线)注水,防止协方差过度收敛
+        // P[0][0] = q0, P[1][1] = q1, P[2][2] = q2, P[3][3] = q3
+        // P[4][4] = gyro_bias_x, P[5][5] = gyro_bias_y
+        kf->P_data[0]  /= INS.lambda;  // q0
+        kf->P_data[7]  /= INS.lambda;  // q1
+        kf->P_data[14] /= INS.lambda;  // q2
+        kf->P_data[21] /= INS.lambda;  // q3
+        kf->P_data[28] /= INS.lambda;  // gyro_bias_x
+        kf->P_data[35] /= INS.lambda;  // gyro_bias_y
         kf->SkipEq5 = FALSE;
     }
 
@@ -428,16 +434,32 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     INS.IMU_QuaternionEKF.MeasuredVector[1] = ay * accelInvNorm;
     INS.IMU_QuaternionEKF.MeasuredVector[2] = az * accelInvNorm;
 
-    // 设置Q,R矩阵
+    // ===== 自适应R矩阵 + 卡方阈值 =====
+    // 计算加速度模长偏离1g的程度(m/s^2)
+    // 静止: deviation≈0 → R≈base 剧烈运动: deviation大 → R自适应增大
+    {
+        float accel_norm = 1.0f / accelInvNorm; // 恢复原始模长 (1/invSqrt = sqrt)
+        float accel_deviation = fabsf(accel_norm - 9.81f);
+
+        // 自适应R: 加速度偏离重力越多,越不信任加速度计
+        // base_R(10) + k * deviation^2, k经调试取10, 剧烈运动时R可达1000+
+        float adaptive_R = INS.R + accel_deviation * accel_deviation * 10.0f;
+        INS.IMU_QuaternionEKF.R_data[0] = adaptive_R;
+        INS.IMU_QuaternionEKF.R_data[4] = adaptive_R;
+        INS.IMU_QuaternionEKF.R_data[8] = adaptive_R;
+
+        // 自适应卡方阈值: 剧烈运动时自动放宽,避免完全丢弃量测退化为纯积分
+        // 静止: 0.01  剧烈运动: 0.01 + deviation*0.005
+        INS.ChiSquareTestThreshold = 0.01f + accel_deviation * 0.005f;
+    }
+
+    // 设置Q矩阵
     INS.IMU_QuaternionEKF.Q_data[0] = INS.Q1 * INS.dt;
     INS.IMU_QuaternionEKF.Q_data[7] = INS.Q1 * INS.dt;
     INS.IMU_QuaternionEKF.Q_data[14] = INS.Q1 * INS.dt;
     INS.IMU_QuaternionEKF.Q_data[21] = INS.Q1 * INS.dt;
     INS.IMU_QuaternionEKF.Q_data[28] = INS.Q2 * INS.dt;
     INS.IMU_QuaternionEKF.Q_data[35] = INS.Q2 * INS.dt;
-    INS.IMU_QuaternionEKF.R_data[0] = INS.R;
-    INS.IMU_QuaternionEKF.R_data[4] = INS.R;
-    INS.IMU_QuaternionEKF.R_data[8] = INS.R;
 
     // 卡尔曼滤波器更新
     Kalman_Filter_Update(&INS.IMU_QuaternionEKF);

@@ -396,7 +396,7 @@
 #define LEG_DDPHI0_LPF_ALPHA         (0.9f)
 #define LEG_DDTHETA_LPF_ALPHA        (0.9f)
 #define LEG_SUPPORT_FORCE_LPF_ALPHA  (0.9f)
-#define CHASSIS_ROLL_ALPHA           (0.5f)
+#define CHASSIS_ROLL_ALPHA           (0.90f)  // roll低通滤波系数(原0.5→0.90, 截止频率~16Hz,抑制运动振荡)
 
 //offest parameters ---------------------
 

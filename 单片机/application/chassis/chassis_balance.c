@@ -1514,7 +1514,8 @@ static void LocomotionController_Pro_NoTail(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
+    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差
     float delta_L0 = 0.0f;
@@ -1571,7 +1572,8 @@ static void LocomotionController_NoTail(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
+    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差
     float delta_L0 = 0.0f;
@@ -1716,7 +1718,8 @@ static void LocomotionController_ProX_Tripod(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
+    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差
     float delta_L0 = 0.0f;
@@ -1838,7 +1841,8 @@ static void LocomotionController_Pro_Tripod(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
+    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差
     float delta_L0 = 0.0f;
@@ -1920,7 +1924,8 @@ static void LocomotionController_Tripod(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
+    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差
     float delta_L0 = 0.0f;
@@ -2008,7 +2013,8 @@ static void LocomotionController_Pro_Bipedal(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
+    float L_diff = CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // float e_beta = CHASSIS.ref.tail_state.beta - CHASSIS.fdb.tail_state.beta;
     // float tail_z_comp;
