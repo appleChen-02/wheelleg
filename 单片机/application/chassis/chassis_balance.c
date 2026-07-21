@@ -1359,10 +1359,8 @@ void ChassisReference(void)
 /* Console                                                        */
 /*----------------------------------------------------------------*/
 /* main function:      ChassisConsole                             */
-/* auxiliary function: LocomotionController_Bipedal               */
-/*                     LegTorqueController                        */
+/* auxiliary function: LegTorqueController                        */
 /*                     LegFeedForward                             */
-/*                     CalcLQR_Bipedal                            */
 /*                     ConsoleZeroForce                           */
 /*                     ConsoleBipedal                             */
 /*                     ConsoleDebug                               */
@@ -1372,7 +1370,6 @@ void ChassisReference(void)
 
 static void LocomotionController_NoTail(void);
 static void LocomotionController_Pro_NoTail(void);
-static void LocomotionController_Bipedal(void);
 static void LocomotionController_Pro_Bipedal(void);
 static void LocomotionController_Tripod(void);
 static void LocomotionController_Pro_Tripod(void);
@@ -2034,101 +2031,6 @@ static void LocomotionController_Pro_Bipedal(void)
 }
 
 /**
- * @brief      运动控制器 有尾模式
- */
-static void LocomotionController_Bipedal(void)
-{
-    // 计算LQR增益=============================================
-    float k[3][8];
-    float x[8];
-    float T_Tp_Tt[3];
-    bool is_take_off = CHASSIS.fdb.leg[0].is_take_off || CHASSIS.fdb.leg[1].is_take_off;
-#if LIFTED_UP
-    is_take_off = true;
-#endif
-    // if (CHASSIS.step == JUMP_STEP_RECOVERY) {
-    //     is_take_off = true;
-    // }
-
-    for (uint8_t i = 0; i < 2; i++) {
-        GetK_Bipedal(CHASSIS.fdb.leg[i].rod.L0, k, is_take_off);
-
-        // clang-format off
-        x[0] = X0_OFFSET + (CHASSIS.fdb.leg_state[i].theta     - CHASSIS.ref.leg_state[i].theta);
-        x[1] = X1_OFFSET + (CHASSIS.fdb.leg_state[i].theta_dot - CHASSIS.ref.leg_state[i].theta_dot);
-        x[2] = X2_OFFSET + (CHASSIS.fdb.leg_state[i].x         - CHASSIS.ref.leg_state[i].x);
-        x[3] = X3_OFFSET + (CHASSIS.fdb.leg_state[i].x_dot     - CHASSIS.ref.leg_state[i].x_dot);
-        x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[i].phi       - CHASSIS.ref.leg_state[i].phi);
-        x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[i].phi_dot   - CHASSIS.ref.leg_state[i].phi_dot);
-        x[6] = X6_OFFSET + (CHASSIS.fdb.tail_state.beta       - CHASSIS.ref.tail_state.beta);
-        x[7] = X7_OFFSET + (CHASSIS.fdb.tail_state.beta_dot   - CHASSIS.ref.tail_state.beta_dot);
-        // clang-format on
-        CalcLQR_Tail(k, x, T_Tp_Tt);
-
-        CHASSIS.cmd.leg[i].wheel.T = T_Tp_Tt[0];
-        CHASSIS.cmd.leg[i].rod.Tp = T_Tp_Tt[1];
-        // CHASSIS.cmd.tail.Tt = T_Tp_Tt[2];
-    }
-
-    x[0] = X0_OFFSET + (CHASSIS.fdb.leg_state[0].theta + CHASSIS.fdb.leg_state[1].theta -
-                        CHASSIS.ref.leg_state[0].theta - CHASSIS.ref.leg_state[1].theta) /
-                           2;
-    x[1] = X1_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot + CHASSIS.fdb.leg_state[1].theta_dot -
-                        CHASSIS.ref.leg_state[0].theta_dot - CHASSIS.ref.leg_state[1].theta_dot) /
-                           2;
-    x[2] = X2_OFFSET + (CHASSIS.fdb.leg_state[0].x + CHASSIS.fdb.leg_state[1].x -
-                        CHASSIS.ref.leg_state[0].x - CHASSIS.ref.leg_state[1].x) /
-                           2;
-    x[3] = X3_OFFSET + (CHASSIS.fdb.leg_state[0].x_dot + CHASSIS.fdb.leg_state[1].x_dot -
-                        CHASSIS.ref.leg_state[0].x_dot - CHASSIS.ref.leg_state[1].x_dot) /
-                           2;
-    x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].phi + CHASSIS.fdb.leg_state[1].phi -
-                        CHASSIS.ref.leg_state[0].phi - CHASSIS.ref.leg_state[1].phi) /
-                           2;
-    x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].phi_dot + CHASSIS.fdb.leg_state[1].phi_dot -
-                        CHASSIS.ref.leg_state[0].phi_dot - CHASSIS.ref.leg_state[1].phi_dot) /
-                           2;
-    x[6] = X6_OFFSET + (CHASSIS.fdb.tail_state.beta - CHASSIS.ref.tail_state.beta);
-    x[7] = X7_OFFSET + (CHASSIS.fdb.tail_state.beta_dot - CHASSIS.ref.tail_state.beta_dot);
-    CalcLQR_Tail(k, x, T_Tp_Tt);
-    CHASSIS.cmd.tail.Tt =
-        T_Tp_Tt[2] -
-        (0.81f * 9.81f * 0.22f) * arm_cos_f32(CHASSIS.fdb.tail_state.beta - CHASSIS.fdb.body.pitch);
-
-    // ROLL角控制=============================================
-    // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.fdb.body.roll, CHASSIS.ref.body.roll);
-
-    // PID补偿稳态误差
-    float delta_L0 = 0.0f;
-
-    // 维持腿长在范围内
-    CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
-
-    // 两腿协调一致
-    PID_calc(
-        &CHASSIS.pid.leg_coordation,
-        CHASSIS.fdb.leg_state[0].theta - CHASSIS.fdb.leg_state[1].theta, 0.0f);
-    CHASSIS.cmd.leg[0].rod.Tp += CHASSIS.pid.leg_coordation.out;
-    CHASSIS.cmd.leg[1].rod.Tp -= CHASSIS.pid.leg_coordation.out;
-
-    // 转向控制================================================
-    if (!is_take_off) {
-        PID_calc(&CHASSIS.pid.yaw_velocity, CHASSIS.fdb.body.yaw_dot, CHASSIS.ref.speed_vector.wz);
-        // PID_calc(&CHASSIS.pid.yaw_angle, CHASSIS.fdb.body.yaw, CHASSIS.ref.body.yaw);
-        CHASSIS.cmd.leg[0].wheel.T -= CHASSIS.pid.yaw_velocity.out;
-        CHASSIS.cmd.leg[1].wheel.T += CHASSIS.pid.yaw_velocity.out;
-        // float Tau = KP_CHASSIS_YAW_ANGLE * (CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw) +
-        //             KD_CHASSIS_YAW_ANGLE * CHASSIS.fdb.body.yaw_dot;
-        // if (Tau > 7.0f) Tau = 7.0f;
-        // if (Tau < -7.0f) Tau = -7.0f;
-        // CHASSIS.cmd.leg[0].wheel.T += Tau / 2.0f;
-        // CHASSIS.cmd.leg[1].wheel.T -= Tau / 2.0f;
-    }
-}
-
-/**
  * @brief Roll控制
  */
 void Roll_Control(
@@ -2409,10 +2311,7 @@ static void ConsoleNoTail(void)  //仅两条腿
 
 static void ConsoleBipedal(void)  //尾离地
 {
-    if (PRO_CONTROLLER)
-        LocomotionController_Pro_Bipedal();
-    else
-        LocomotionController_Bipedal();
+    LocomotionController_Pro_Bipedal();
 
     LegTorqueController();
 

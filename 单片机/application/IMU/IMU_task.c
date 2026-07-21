@@ -254,9 +254,9 @@ void IMU_task(void const * pvParameters)
 
 static void UpdateImuData(void)
 {
-    IMU_DATA.angle[AX_X] = INS.angle[AX_X];
-    IMU_DATA.angle[AX_Y] = INS.angle[AX_Y];
-    IMU_DATA.angle[AX_Z] = INS.angle[AX_Z];
+    IMU_DATA.angle[AX_X] = INS.angle[AX_X] - __ANGLE_OFFSET_ROLL;
+    IMU_DATA.angle[AX_Y] = INS.angle[AX_Y] - __ANGLE_OFFSET_PITCH;
+    IMU_DATA.angle[AX_Z] = INS.angle[AX_Z] - __ANGLE_OFFSET_YAW;
 
     IMU_DATA.gyro[AX_X] = INS_gyro[AX_X];
     IMU_DATA.gyro[AX_Y] = INS_gyro[AX_Y];

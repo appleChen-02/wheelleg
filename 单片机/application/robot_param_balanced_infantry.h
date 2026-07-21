@@ -12,6 +12,12 @@
 #define __SELF_BOARD_ID C_BOARD_BALANCE_CHASSIS // 本板ID
 #define __GYRO_BIAS_YAW  0.003096855f           // 陀螺仪零飘，单位rad/s
 
+// IMU角度静态偏移标定 (rad) —— 补偿放置不水平或其他恒定角度偏差
+// 使用方法：将机器人放在期望的"零位"，开机后读取稳定角度值，取反填入
+#define __ANGLE_OFFSET_ROLL   0.0361f   // roll 角度静态偏移 (rad)
+#define __ANGLE_OFFSET_PITCH  0.0f   // pitch 角度静态偏移 (rad)
+#define __ANGLE_OFFSET_YAW    -0.016f   // yaw 角度静态偏移 (rad)
+
 #define __CONTROL_LINK_RC  CL_RC_DIRECT  // 控制链路选择：RC遥控器
 #define __CONTROL_LINK_KM  CL_KM_NONE      // 控制链路选择：键鼠数据
 
