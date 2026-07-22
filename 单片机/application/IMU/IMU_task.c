@@ -193,7 +193,8 @@ void IMU_task(void const * pvParameters)
     imu_start_dma_flag = 1;
 
     gEstimateKF_Init(1, 2000);
-    IMU_QuaternionEKF_Init(2.0f, 0.001f, 10.0f, 0.9996f);
+    IMU_QuaternionEKF_Init(2.0f, 0.001f, 3.0f, 0.998f);
+    // R=3.0 (原10.0): 提升Kalman增益~3×, 加快扰动后收敛; λ=0.998 (原0.9996): 防协方差过度收敛
 
     while (1)
     {

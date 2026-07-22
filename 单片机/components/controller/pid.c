@@ -2,7 +2,7 @@
   ****************************(C) COPYRIGHT 2019 DJI****************************
   * @file       pid.c/h
   * @brief      pid实现函数，包括初始化，PID计算函数，
-  * @note       
+  * @note
   * @history
   *  Version    Date            Author          Modification
   *  V1.0.0     Dec-26-2018     RM              1. 完成
@@ -53,6 +53,7 @@ void PID_init(pid_type_def * pid, uint8_t mode, const fp32 PID[3], fp32 max_out,
     pid->Dbuf[0] = pid->Dbuf[1] = pid->Dbuf[2] = 0.0f;
     pid->error[0] = pid->error[1] = pid->error[2] = pid->Pout = pid->Iout = pid->Dout = pid->out =
         0.0f;
+    pid->Kb = 0.0f;  // 默认禁用反计算抗饱和，保持向后兼容
 }
 
 /**
@@ -79,6 +80,20 @@ void PID_PositionSetEkRange(pid_type_def * pid, fp32 err_low, fp32 err_up)
 {
     pid->err_low = err_low;
     pid->err_up = err_up;
+}
+
+/**
+  * @brief          设置反计算抗饱和增益
+  * @param[out]     pid: PID结构数据指针
+  * @param[in]      Kb: 反计算增益 (≤0 禁用, 典型值 = Ki)
+  * @retval         none
+  */
+void PID_SetAntiWindupKb(pid_type_def * pid, fp32 Kb)
+{
+    if (pid == NULL) {
+        return;
+    }
+    pid->Kb = Kb;
 }
 
 /**
@@ -116,9 +131,16 @@ fp32 PID_calc(pid_type_def * pid, fp32 ref, fp32 set)
         // 对 Dbuf[0] 进行低通滤波
         pid->Dbuf[0] = pid->N * pid->Dbuf[1] + (1.0f - pid->N) * (pid->error[0] - pid->error[1]);
         pid->Dout = pid->Kd * pid->Dbuf[0];
-        LimitMax(pid->Iout, pid->max_iout);
-        pid->out = pid->Pout + pid->Iout + pid->Dout;
-        LimitMax(pid->out, pid->max_out);
+
+        // ---- 反计算抗饱和 (back-calculation anti-windup) ----
+        LimitMax(pid->Iout, pid->max_iout);                        // 先钳位积分项
+        fp32 u_unsat = pid->Pout + pid->Iout + pid->Dout;          // 未饱和总输出
+        pid->out = u_unsat;
+        LimitMax(pid->out, pid->max_out);                          // 钳位总输出
+        if (pid->Kb > 0.0f) {
+            pid->Iout += pid->Kb * (pid->out - u_unsat);           // 反计算修正积分项
+            LimitMax(pid->Iout, pid->max_iout);                    // 再次钳位积分项
+        }
     } else if (pid->mode == PID_DELTA) {
         pid->Pout = pid->Kp * (pid->error[0] - pid->error[1]);
         pid->Iout = pid->Ki * pid->error[0];
@@ -152,22 +174,27 @@ fp32 PID_calc_Leg(pid_type_def * pid, fp32 ref, fp32 set, bool is_take_off)
         // pid->Iout += pid->Ki * pid->error[0];
         if (pid->error[0] > pid->errsum_low && pid->error[0] < pid->errsum_up)
             pid->Iout += pid->Ki * pid->error[0];  //积分分离
-        else
-            pid->Iout = 0;
 
-        if (is_take_off) //专为离地检测使用
-	    {
-		    pid->Iout = 0;
-	    }
+        if (is_take_off)  // 专为离地检测使用
+        {
+            pid->Iout = 0;
+        }
 
         pid->Dbuf[2] = pid->Dbuf[1];
         pid->Dbuf[1] = pid->Dbuf[0];
         // 对 Dbuf[0] 进行低通滤波
         pid->Dbuf[0] = pid->N * pid->Dbuf[1] + (1.0f - pid->N) * (pid->error[0] - pid->error[1]);
         pid->Dout = pid->Kd * pid->Dbuf[0];
-        LimitMax(pid->Iout, pid->max_iout);
-        pid->out = pid->Pout + pid->Iout + pid->Dout;
-        LimitMax(pid->out, pid->max_out);
+
+        // ---- 反计算抗饱和 (back-calculation anti-windup) ----
+        LimitMax(pid->Iout, pid->max_iout);                        // 先钳位积分项
+        fp32 u_unsat = pid->Pout + pid->Iout + pid->Dout;          // 未饱和总输出
+        pid->out = u_unsat;
+        LimitMax(pid->out, pid->max_out);                          // 钳位总输出
+        if (pid->Kb > 0.0f) {
+            pid->Iout += pid->Kb * (pid->out - u_unsat);           // 反计算修正积分项
+            LimitMax(pid->Iout, pid->max_iout);                    // 再次钳位积分项
+        }
     } else if (pid->mode == PID_DELTA) {
         pid->Pout = pid->Kp * (pid->error[0] - pid->error[1]);
         pid->Iout = pid->Ki * pid->error[0];

@@ -442,8 +442,9 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
         float accel_deviation = fabsf(accel_norm - 9.81f);
 
         // 自适应R: 加速度偏离重力越多,越不信任加速度计
-        // base_R(10) + k * deviation^2, k经调试取10, 剧烈运动时R可达1000+
+        // base_R * (1 + k*deviation²), R_base=3, 上限50防剧烈运动中量测完全失效
         float adaptive_R = INS.R + accel_deviation * accel_deviation * 10.0f;
+        if (adaptive_R > 50.0f) adaptive_R = 50.0f;
         INS.IMU_QuaternionEKF.R_data[0] = adaptive_R;
         INS.IMU_QuaternionEKF.R_data[4] = adaptive_R;
         INS.IMU_QuaternionEKF.R_data[8] = adaptive_R;

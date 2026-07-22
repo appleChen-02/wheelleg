@@ -46,6 +46,7 @@ typedef struct
     fp32 err_up;    //误差死区
     fp32 errsum_low;//积分分离下限
     fp32 errsum_up; //积分分离上限
+    fp32 Kb;        //反计算抗饱和增益 (0 = 禁用, 典型值 ≈ Ki ~ Kp/Ki)
 } pid_type_def;
 
 typedef struct Pid_t
@@ -125,6 +126,14 @@ void PID_PositionSetEkRange(pid_type_def * pid, fp32 err_low, fp32 err_up);
   * @retval         none
   */
 void PID_PositionSetEkSumRange(pid_type_def * pid, fp32 errsum_low, fp32 errsum_up);
+
+/**
+  * @brief          设置反计算抗饱和增益
+  * @param[out]     pid: PID结构数据指针
+  * @param[in]      Kb: 反计算增益 (≤0 禁用, 典型值 = Ki ~ Kp/Ki)
+  * @retval         none
+  */
+extern void PID_SetAntiWindupKb(pid_type_def * pid, fp32 Kb);
 
 #endif
 /*------------------------------ End of File ------------------------------*/
