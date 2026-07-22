@@ -340,15 +340,29 @@
 // #define MAX_IOUT_CHASSIS_ROLL_VELOCITY  (0.01f)
 // #define MAX_OUT_CHASSIS_ROLL_VELOCITY   (0.1f)
 
-// 腿长跟踪长度环PID参数
-#define KP_CHASSIS_LEG_LENGTH_LENGTH        (600.0f)
-#define KI_CHASSIS_LEG_LENGTH_LENGTH        (3.5f)
-#define KD_CHASSIS_LEG_LENGTH_LENGTH        (620.0f)
-#define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH  (40.0f)
-#define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH   (80.0f)
-#define N_LEG_LENGTH_LENGTH                 (0.1f)
-#define ERRORSUM_UP_LEG_LENGTH              (0.25f)
-#define ERRORSUM_LOW_LEG_LENGTH             (-ERRORSUM_UP_LEG_LENGTH)
+// 腿长跟踪长度环PID参数（左腿 leg0）
+#define KP_CHASSIS_LEG_LENGTH_LENGTH_L        (600.0f)
+#define KI_CHASSIS_LEG_LENGTH_LENGTH_L        (3.5f)
+#define KD_CHASSIS_LEG_LENGTH_LENGTH_L        (620.0f)
+#define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_L  (40.0f)
+#define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_L   (80.0f)
+#define N_LEG_LENGTH_LENGTH_L                 (0.1f)
+#define ERRORSUM_UP_LEG_LENGTH_L              (0.25f)
+#define ERRORSUM_LOW_LEG_LENGTH_L             (-ERRORSUM_UP_LEG_LENGTH_L)
+
+// 腿长跟踪长度环PID参数（右腿 leg1）
+// 左右腿因机械装配差异可独立调参
+#define KP_CHASSIS_LEG_LENGTH_LENGTH_R        (600.0f)
+#define KI_CHASSIS_LEG_LENGTH_LENGTH_R        (3.5f)
+#define KD_CHASSIS_LEG_LENGTH_LENGTH_R        (620.0f)
+#define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_R  (40.0f)
+#define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_R   (80.0f)
+#define N_LEG_LENGTH_LENGTH_R                 (0.1f)
+#define ERRORSUM_UP_LEG_LENGTH_R              (0.25f)
+#define ERRORSUM_LOW_LEG_LENGTH_R             (-ERRORSUM_UP_LEG_LENGTH_R)
+
+// roll死区保护 —— 角度误差小于阈值时不产生腿长差，避免微小IMU噪声被高增益PID放大为力指令振荡
+#define CHASSIS_ROLL_DEADBAND                 (0.015f)  // rad, ~0.86°
 
 // theta补偿PID参数
 #define KP_CHASSIS_THETA_COMP        (0.0f)
@@ -358,7 +372,7 @@
 #define MAX_OUT_CHASSIS_THETA_COMP   (3.0f)
 #define N_CHASSIS_THETA_COMP                 (0.1f)
 #define ERRORSUM_UP_THETA_COMP              (0.3f)
-#define ERRORSUM_LOW_THETA_COMP             (-ERRORSUM_UP_LEG_LENGTH)
+#define ERRORSUM_LOW_THETA_COMP             (-ERRORSUM_UP_LEG_LENGTH_L)
 
 // 腿长跟踪长度环PID参数
 // #define KP_CHASSIS_LEG_LENGTH_LENGTH        (150.0f)

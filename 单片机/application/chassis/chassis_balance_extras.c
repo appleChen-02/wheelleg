@@ -1212,9 +1212,16 @@ void Leg_Inverse_Kinematics_Solution(float phi_0, float L_0, float phi1_phi4[2])
  * @param[in]  theta0 (rad)当前底盘roll角
  * @param[in]  theta1 (rad)目标roll角
  * @return 两腿长度期望差值(m)(L1r - L1l)
+ * @note   包含roll死区保护: |theta0 - theta1| < DEADBAND时不产生额外腿长补偿,
+ *          避免稳态微小IMU噪声被高增益PID放大为力指令振荡
  */
 inline float CalcLegLengthDiff(float Ld0, float theta0, float theta1)
 {
+    // Roll死区保护: 角度误差在死区内时维持当前腿长差,不产生额外几何补偿
+    float roll_err = theta0 - theta1;
+    if (roll_err < CHASSIS_ROLL_DEADBAND && roll_err > -CHASSIS_ROLL_DEADBAND) {
+        theta0 = theta1;
+    }
     return WHEEL_BASE * tanf(theta1) -
            cosf(theta0) / cosf(theta1) * (WHEEL_BASE * tanf(theta0) - Ld0);
 }

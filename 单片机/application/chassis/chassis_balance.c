@@ -249,8 +249,10 @@ void ChassisInit(void)
     // float roll_velocity_pid[3] = {
     //     KP_CHASSIS_ROLL_VELOCITY, KI_CHASSIS_ROLL_VELOCITY, KD_CHASSIS_ROLL_VELOCITY};
 
-    float leg_length_length_pid[3] = {
-        KP_CHASSIS_LEG_LENGTH_LENGTH, KI_CHASSIS_LEG_LENGTH_LENGTH, KD_CHASSIS_LEG_LENGTH_LENGTH};
+    float leg_length_length_pid_l[3] = {
+        KP_CHASSIS_LEG_LENGTH_LENGTH_L, KI_CHASSIS_LEG_LENGTH_LENGTH_L, KD_CHASSIS_LEG_LENGTH_LENGTH_L};
+    float leg_length_length_pid_r[3] = {
+        KP_CHASSIS_LEG_LENGTH_LENGTH_R, KI_CHASSIS_LEG_LENGTH_LENGTH_R, KD_CHASSIS_LEG_LENGTH_LENGTH_R};
 
     PID_init(
         &CHASSIS.pid.roll_angle, PID_POSITION, roll_angle_pid, MAX_OUT_CHASSIS_ROLL_ANGLE,
@@ -267,19 +269,21 @@ void ChassisInit(void)
     //     &CHASSIS.pid.roll_velocity, PID_POSITION, roll_velocity_pid, MAX_OUT_CHASSIS_ROLL_VELOCITY,
     //     MAX_IOUT_CHASSIS_ROLL_VELOCITY);
 
+    // 左腿 (leg0) 腿长PID
     PID_init(
-        &CHASSIS.pid.leg_length_length[0], PID_POSITION, leg_length_length_pid,
-        MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH, MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH);
-    CHASSIS.pid.leg_length_length[0].N = N_LEG_LENGTH_LENGTH;
+        &CHASSIS.pid.leg_length_length[0], PID_POSITION, leg_length_length_pid_l,
+        MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_L, MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_L);
+    CHASSIS.pid.leg_length_length[0].N = N_LEG_LENGTH_LENGTH_L;
     PID_PositionSetEkSumRange(
-        &CHASSIS.pid.leg_length_length[0], ERRORSUM_LOW_LEG_LENGTH, ERRORSUM_UP_LEG_LENGTH);
+        &CHASSIS.pid.leg_length_length[0], ERRORSUM_LOW_LEG_LENGTH_L, ERRORSUM_UP_LEG_LENGTH_L);
 
+    // 右腿 (leg1) 腿长PID —— 可独立于左腿调参
     PID_init(
-        &CHASSIS.pid.leg_length_length[1], PID_POSITION, leg_length_length_pid,
-        MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH, MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH);
-    CHASSIS.pid.leg_length_length[1].N = N_LEG_LENGTH_LENGTH;
+        &CHASSIS.pid.leg_length_length[1], PID_POSITION, leg_length_length_pid_r,
+        MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_R, MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_R);
+    CHASSIS.pid.leg_length_length[1].N = N_LEG_LENGTH_LENGTH_R;
     PID_PositionSetEkSumRange(
-        &CHASSIS.pid.leg_length_length[1], ERRORSUM_LOW_LEG_LENGTH, ERRORSUM_UP_LEG_LENGTH);
+        &CHASSIS.pid.leg_length_length[1], ERRORSUM_LOW_LEG_LENGTH_R, ERRORSUM_UP_LEG_LENGTH_R);
 
     /*========== End of locomotion control pid ==========*/
 
