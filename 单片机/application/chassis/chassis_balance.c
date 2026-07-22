@@ -1521,8 +1521,9 @@ static void LocomotionController_Pro_NoTail(void)
     // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
     float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
-    // PID补偿稳态误差
-    float delta_L0 = 0.0f;
+    // PID补偿稳态误差 + roll角速度阻尼
+    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
+    float delta_L0 = roll_dot_damp;
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1579,8 +1580,9 @@ static void LocomotionController_NoTail(void)
     // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
     float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
-    // PID补偿稳态误差
-    float delta_L0 = 0.0f;
+    // PID补偿稳态误差 + roll角速度阻尼
+    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
+    float delta_L0 = roll_dot_damp;
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1725,8 +1727,9 @@ static void LocomotionController_ProX_Tripod(void)
     // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
     float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
-    // PID补偿稳态误差
-    float delta_L0 = 0.0f;
+    // PID补偿稳态误差 + roll角速度阻尼
+    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
+    float delta_L0 = roll_dot_damp;
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1848,8 +1851,9 @@ static void LocomotionController_Pro_Tripod(void)
     // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
     float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
-    // PID补偿稳态误差
-    float delta_L0 = 0.0f;
+    // PID补偿稳态误差 + roll角速度阻尼
+    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
+    float delta_L0 = roll_dot_damp;
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1931,8 +1935,9 @@ static void LocomotionController_Tripod(void)
     // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
     float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
-    // PID补偿稳态误差
-    float delta_L0 = 0.0f;
+    // PID补偿稳态误差 + roll角速度阻尼
+    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
+    float delta_L0 = roll_dot_damp;
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -2032,8 +2037,9 @@ static void LocomotionController_Pro_Bipedal(void)
     // else
     //     tail_z_comp = 0.0f;
 
-    // // PID补偿稳态误差
-    float delta_L0 = 0.0f;
+    // PID补偿稳态误差 + roll角速度阻尼
+    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
+    float delta_L0 = roll_dot_damp;
     // CHASSIS.ref.rod_L0[0] += (-tail_z_comp);
     // CHASSIS.ref.rod_L0[1] += (-tail_z_comp);
     // 维持腿长在范围内

@@ -364,6 +364,10 @@
 // roll死区保护 —— 角度误差小于阈值时不产生腿长差，避免微小IMU噪声被高增益PID放大为力指令振荡
 #define CHASSIS_ROLL_DEADBAND                 (0.015f)  // rad, ~0.86°
 
+// roll角速度阻尼 —— roll_dot > 0 时右腿伸长/左腿缩短以抵抗倾斜趋势
+// 参考: roll_dot ≈ 1 rad/s 共约产生 0.01m 腿长差补偿
+#define ROLL_DOT_DAMPING_GAIN                 (0.01f)  // m/(rad/s)
+
 // theta补偿PID参数
 #define KP_CHASSIS_THETA_COMP        (0.0f)
 #define KI_CHASSIS_THETA_COMP        (0.02f)
