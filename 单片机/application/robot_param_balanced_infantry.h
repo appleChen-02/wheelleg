@@ -365,8 +365,9 @@
 #define CHASSIS_ROLL_DEADBAND                 (0.015f)  // rad, ~0.86°
 
 // roll角速度阻尼 —— roll_dot > 0 时右腿伸长/左腿缩短以抵抗倾斜趋势
-// 参考: roll_dot ≈ 1 rad/s 共约产生 0.01m 腿长差补偿
-#define ROLL_DOT_DAMPING_GAIN                 (0.01f)  // m/(rad/s)
+// roll_dot ≈ 1 rad/s 时产生 0.05m 腿长差补偿 (原0.01→0.05: 阻尼比ζ从~0.1提升到~0.5)
+// 调参: 仍有等幅振荡→增大(0.07); 腿长高频抖动→减小(0.03)
+#define ROLL_DOT_DAMPING_GAIN                 (0.05f)  // m/(rad/s)
 
 // theta补偿PID参数
 #define KP_CHASSIS_THETA_COMP        (0.0f)
