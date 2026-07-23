@@ -275,6 +275,7 @@ typedef struct LPF
     LowPassFilter_t leg_theta_accel_filter[2];
     LowPassFilter_t support_force_filter[2];
     LowPassFilter_t roll;
+    LowPassFilter_t leg_diff;   // 腿长差低通滤波(切断反馈回路正反馈)
 } LPF_t;
 
 /**

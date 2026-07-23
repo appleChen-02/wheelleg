@@ -314,6 +314,7 @@ void ChassisInit(void)
     LowPassFilterInit(&CHASSIS.lpf.support_force_filter[1], LEG_SUPPORT_FORCE_LPF_ALPHA);
 
     LowPassFilterInit(&CHASSIS.lpf.roll, CHASSIS_ROLL_ALPHA);
+    LowPassFilterInit(&CHASSIS.lpf.leg_diff, LEG_DIFF_LPF_ALPHA);
 
     // 初始化机体速度观测器
     // 使用kf同时估计速度和加速度
@@ -540,6 +541,11 @@ static void UpdateBodyStatus(void)  //主要是imu和磁力计那些
 
     LowPassFilterCalc(&CHASSIS.lpf.roll, CHASSIS.fdb.body.roll);
 
+    // 腿长差低通滤波：切断Ld0→rod_L0的正反馈回路
+    {
+        float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
+        LowPassFilterCalc(&CHASSIS.lpf.leg_diff, Ld0);
+    }
     // 更新加速度反馈数据，记录下来方便使用
     float ax = GetImuAccel(AX_X);
     float ay = GetImuAccel(AX_Y);
@@ -1517,13 +1523,11 @@ static void LocomotionController_Pro_NoTail(void)
 
     // ROLL角控制=============================================
     // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = -CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差 + roll角速度阻尼
-    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
-    float delta_L0 = roll_dot_damp;
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1576,13 +1580,11 @@ static void LocomotionController_NoTail(void)
 
     // ROLL角控制=============================================
     // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = -CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差 + roll角速度阻尼
-    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
-    float delta_L0 = roll_dot_damp;
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1723,13 +1725,11 @@ static void LocomotionController_ProX_Tripod(void)
 
     // ROLL角控制=============================================
     // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = -CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差 + roll角速度阻尼
-    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
-    float delta_L0 = roll_dot_damp;
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1847,13 +1847,11 @@ static void LocomotionController_Pro_Tripod(void)
 
     // ROLL角控制=============================================
     // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = -CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差 + roll角速度阻尼
-    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
-    float delta_L0 = roll_dot_damp;
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -1931,13 +1929,11 @@ static void LocomotionController_Tripod(void)
 
     // ROLL角控制=============================================
     // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
-    float L_diff = -CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = -CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差 + roll角速度阻尼
-    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
-    float delta_L0 = roll_dot_damp;
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
 
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
@@ -2020,10 +2016,8 @@ static void LocomotionController_Pro_Bipedal(void)
     CHASSIS.cmd.tail.Tt = Tp_T_Tt[4] + T0_eq[1];
 
     // ROLL角控制=============================================
-    // 计算腿长差值
-    float Ld0 = CHASSIS.fdb.leg[0].rod.L0 - CHASSIS.fdb.leg[1].rod.L0;
-    // 使用低通滤波后的roll值,抑制IMU运动噪声引起的腿长指令振荡
-    float L_diff = CalcLegLengthDiff(Ld0, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // float e_beta = CHASSIS.ref.tail_state.beta - CHASSIS.fdb.tail_state.beta;
     // float tail_z_comp;
@@ -2038,8 +2032,7 @@ static void LocomotionController_Pro_Bipedal(void)
     //     tail_z_comp = 0.0f;
 
     // PID补偿稳态误差 + roll角速度阻尼
-    float roll_dot_damp = CHASSIS.fdb.body.roll_dot * ROLL_DOT_DAMPING_GAIN;
-    float delta_L0 = roll_dot_damp;
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
     // CHASSIS.ref.rod_L0[0] += (-tail_z_comp);
     // CHASSIS.ref.rod_L0[1] += (-tail_z_comp);
     // 维持腿长在范围内

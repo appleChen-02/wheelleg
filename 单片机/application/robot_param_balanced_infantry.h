@@ -343,22 +343,22 @@
 // 腿长跟踪长度环PID参数（左腿 leg0）
 #define KP_CHASSIS_LEG_LENGTH_LENGTH_L        (600.0f)
 #define KI_CHASSIS_LEG_LENGTH_LENGTH_L        (0.7f)
-#define KD_CHASSIS_LEG_LENGTH_LENGTH_L        (15000.0f)
+#define KD_CHASSIS_LEG_LENGTH_LENGTH_L        (1500.0f)
 #define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_L  (40.0f)
 #define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_L   (80.0f)
 #define N_LEG_LENGTH_LENGTH_L                 (0.1f)
-#define ERRORSUM_UP_LEG_LENGTH_L              (0.25f)
+#define ERRORSUM_UP_LEG_LENGTH_L              (0.05f)   // 积分分离上限 5cm (原25cm, 防止积分饱和)
 #define ERRORSUM_LOW_LEG_LENGTH_L             (-ERRORSUM_UP_LEG_LENGTH_L)
 
 // 腿长跟踪长度环PID参数（右腿 leg1）
 // 左右腿因机械装配差异可独立调参
 #define KP_CHASSIS_LEG_LENGTH_LENGTH_R        (600.0f)
 #define KI_CHASSIS_LEG_LENGTH_LENGTH_R        (0.7f)
-#define KD_CHASSIS_LEG_LENGTH_LENGTH_R        (15000.0f)
+#define KD_CHASSIS_LEG_LENGTH_LENGTH_R        (1500.0f)
 #define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_R  (40.0f)
 #define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_R   (80.0f)
 #define N_LEG_LENGTH_LENGTH_R                 (0.1f)
-#define ERRORSUM_UP_LEG_LENGTH_R              (0.25f)
+#define ERRORSUM_UP_LEG_LENGTH_R              (0.05f)   // 积分分离上限 5cm (原25cm, 防止积分饱和)
 #define ERRORSUM_LOW_LEG_LENGTH_R             (-ERRORSUM_UP_LEG_LENGTH_R)
 
 // roll死区保护 —— 角度误差小于阈值时不产生腿长差，避免微小IMU噪声被高增益PID放大为力指令振荡
@@ -416,6 +416,7 @@
 #define LEG_DDTHETA_LPF_ALPHA        (0.9f)
 #define LEG_SUPPORT_FORCE_LPF_ALPHA  (0.9f)
 #define CHASSIS_ROLL_ALPHA           (0.90f)  // roll低通滤波系数(原0.5→0.90, 截止频率~16Hz,抑制运动振荡)
+#define LEG_DIFF_LPF_ALPHA           (0.92f)  // 腿长差低通滤波系数(截止频率~6Hz,切断正反馈回路)
 
 //offest parameters ---------------------
 
