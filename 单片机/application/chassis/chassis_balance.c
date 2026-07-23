@@ -1726,7 +1726,7 @@ static void LocomotionController_ProX_Tripod(void)
     // ROLL角控制=============================================
     // 计算腿长差值
     // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
-    float L_diff = -CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
 
     // PID补偿稳态误差 + roll角速度阻尼
     float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
