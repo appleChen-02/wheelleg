@@ -1633,7 +1633,7 @@ float Get_Tt0_Tripod(float l)
 }
 
 /**
- * @brief      运动控制器 尾巴触地模式Pro版——VMC
+ * @brief      运动控制器 尾巴触地模式Pro版——VMC 现在在用的版本
  */
 static void LocomotionController_ProX_Tripod(void)
 {

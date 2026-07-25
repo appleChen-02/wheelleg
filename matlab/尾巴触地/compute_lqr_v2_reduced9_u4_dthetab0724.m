@@ -40,7 +40,7 @@ R_w_val = 0.386 / 2;        % 轮距/2 (m)
 % ==================== 机体参数 ====================
 m_b_val = 6.9;              % 机体质量 (kg)
 I_b_val = 59035.925e-6;     % 机体俯仰转动惯量 (kg·m²)
-l_b_val = 4.3e-3;           % 机体质心到俯仰轴距离 (m)
+l_body_com_val = 4.3e-3;           % 机体质心到俯仰轴距离 (m)
 I_yaw_val = 294272.34e-6;   % 整体yaw轴转动惯量 (kg·m²)
 theta_b0_val = 0;           % 质心偏移角度 (rad)
 
@@ -57,17 +57,17 @@ m_l_val = 2.2;              % 左腿质量 (kg)
 m_r_val = 2.2;              % 右腿质量 (kg)
 I_l_val = 0.034231929;      % 左腿转动惯量 (kg·m²)
 I_r_val = 0.034231929;      % 右腿转动惯量 (kg·m²)
-l_l_d_val = 0.10157;        % 左腿质心到轮轴距离 (m)
-l_r_d_val = 0.10157;        % 右腿质心到轮轴距离 (m)
+l_leg_l_com_val = 0.10157;        % 左腿质心到轮轴距离 (m)
+l_leg_r_com_val = 0.10157;        % 右腿质心到轮轴距离 (m)
 theta_l0_val = 0.582108261; % 左腿偏移角度 (rad)
 theta_r0_val = 0.582108261; % 右腿偏移角度 (rad)
 
 % ==================== 尾巴参数 ====================
 m_t_val = 0.87;             % 尾巴质量 (kg)
 I_t_val = 55967.334e-6;     % 尾巴绕尾电机轴转动惯量 (kg·m²)
-a_t_p_val = 0.0;            % 尾电机相对机体质心前向距离
-b_t_p_val = 0.089;          % 尾电机相对机体质心下向距离
-l_t_c_val = 0.23985;        % 尾电机到尾巴质心距离
+l_tail_mount_h_val = 0.0;            % 尾电机相对机体质心前向距离
+l_tail_mount_v_val = 0.089;          % 尾电机相对机体质心下向距离
+l_tail_com_val = 0.23985;        % 尾电机到尾巴质心距离
 delta_t_val = 0.1034;       % 尾巴质心偏置角 (rad)
 theta_t_star_val = 0.0;     % 尾巴平衡角 (rad), 水平
 
@@ -99,10 +99,10 @@ syms T_t_to_b real
 % ========== 物理参数符号 ==========
 syms m_b m_l m_r m_wl m_wr real
 syms I_b I_l I_r I_wl I_wr I_yaw real
-syms l_b l_l l_r l_l_d l_r_d real
+syms l_body_com l_l l_r l_leg_l_com l_leg_r_com real
 syms theta_l0 theta_r0 theta_b0 real
 syms R R_w g real
-syms m_t I_t a_t_p b_t_p l_t_c delta_t real
+syms m_t I_t l_tail_mount_h l_tail_mount_v l_tail_com delta_t real
 
 % 加载动力学方程
 load('dynamics_new_coords.mat');
@@ -202,9 +202,9 @@ param_subs = {
     I_yaw, I_yaw_val;
     l_l, l_l_val;
     l_r, l_r_val;
-    l_l_d, l_l_d_val;
-    l_r_d, l_r_d_val;
-    l_b, l_b_val;
+    l_leg_l_com, l_leg_l_com_val;
+    l_leg_r_com, l_leg_r_com_val;
+    l_body_com, l_body_com_val;
     R, R_val;
     R_w, R_w_val;
     g, g_val;
@@ -213,9 +213,9 @@ param_subs = {
     theta_b0, theta_b0_val;
     m_t, m_t_val;
     I_t, I_t_val;
-    a_t_p, a_t_p_val;
-    b_t_p, b_t_p_val;
-    l_t_c, l_t_c_val;
+    l_tail_mount_h, l_tail_mount_h_val;
+    l_tail_mount_v, l_tail_mount_v_val;
+    l_tail_com, l_tail_com_val;
     delta_t, delta_t_val;
 };
 
@@ -645,13 +645,13 @@ if enable_fitting
             % ==================== 左腿参数 ====================
             l_l_fit = l_range(i);
             theta_l0_fit = theta0_fun(l_l_fit);
-            l_l_d_fit    = ld_fun(l_l_fit);
+            l_leg_l_com_fit    = ld_fun(l_l_fit);
             I_l_fit      = Ileg_fun(l_l_fit);
 
             % ==================== 右腿参数 ====================
             l_r_fit = l_range(j);
             theta_r0_fit = theta0_fun(l_r_fit);
-            l_r_d_fit    = ld_fun(l_r_fit);
+            l_leg_r_com_fit    = ld_fun(l_r_fit);
             I_r_fit      = Ileg_fun(l_r_fit);
 
             % yaw 惯量拟合（沿用旧逻辑）
@@ -664,12 +664,12 @@ if enable_fitting
                 I_b, I_b_val;   I_l, I_l_fit;   I_r, I_r_fit;
                 I_wl, I_wl_val; I_wr, I_wr_val; I_yaw, I_yaw_fit;
                 l_l, l_l_fit;   l_r, l_r_fit;
-                l_l_d, l_l_d_fit; l_r_d, l_r_d_fit;
-                l_b, l_b_val;   R, R_val;       R_w, R_w_val;   g, g_val;
+                l_leg_l_com, l_leg_l_com_fit; l_leg_r_com, l_leg_r_com_fit;
+                l_body_com, l_body_com_val;   R, R_val;       R_w, R_w_val;   g, g_val;
                 theta_l0, theta_l0_fit; theta_r0, theta_r0_fit; theta_b0, theta_b0_val;
                 m_t, m_t_val;   I_t, I_t_val;
-                a_t_p, a_t_p_val; b_t_p, b_t_p_val;
-                l_t_c, l_t_c_val; delta_t, delta_t_val;
+                l_tail_mount_h, l_tail_mount_h_val; l_tail_mount_v, l_tail_mount_v_val;
+                l_tail_com, l_tail_com_val; delta_t, delta_t_val;
             };
 
             try

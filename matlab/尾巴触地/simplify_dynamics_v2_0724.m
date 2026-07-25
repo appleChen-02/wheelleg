@@ -118,7 +118,8 @@ eq1 = m_b*a_b_h + m_l*a_l_h + m_r*a_r_h + m_t*a_t_h + m_wl*a_wl_h + m_wr*a_wr_h 
 
 % 最终方程2: 机体转动
 F_t_to_b_h_expr = -m_t*a_t_h;
-F_t_to_b_v_expr = -m_t*g - m_t*a_t_v;
+F_t_to_b_v_expr = m_t*g - m_t*a_t_v;
+
 eq2 = I_b*ddtheta_b - T_l_to_b - T_r_to_b - T_t_to_b ...
     - (r_bp_h * F_t_to_b_v_expr - r_bp_v * F_t_to_b_h_expr) ...
     - m_b*g*l_body_com*sin(theta_b + theta_b0);
