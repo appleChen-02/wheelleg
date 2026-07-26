@@ -91,7 +91,7 @@
 #define TAIL_POS_OFFSET_VERTICAL (0.1105f)
 #define TAIL_LENGTH              (0.240f)
 #define TAIL_MASS                (0.83f)
-#define TAIL_BETA_INIT           (-14.0f)
+#define TAIL_BETA_INIT           (-20.0f)
 
 #else
 #define TAIL_COM_to_MOTOR        (0.23985f)

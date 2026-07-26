@@ -1194,8 +1194,12 @@ void ChassisReference(void)
             rc_deadband_limit(
                 CHASSIS.rc->rc.ch[CHASSIS_ROLL_CHANNEL], rc_roll, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→roll
         } else if (CHASSIS.mode == CHASSIS_TRIPOD) {
+            // rc_deadband_limit(
+            //     CHASSIS.rc->rc.ch[CHASSIS_ANGLE_CHANNEL], rc_angle, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→摆角
+            // rc_deadband_limit(
+            //     CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
             rc_deadband_limit(
-                CHASSIS.rc->rc.ch[CHASSIS_ANGLE_CHANNEL], rc_angle, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→摆角
+                CHASSIS.rc->rc.ch[CHASSIS_TAIL_POS_CHANNEL], rc_tail, CHASSIS_RC_DEADLINE);  // ch[1]=CH2→尾巴
             rc_deadband_limit(
                 CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_length, CHASSIS_RC_DEADLINE);  // ch[0]=CH1→腿长
         } else if (CHASSIS.mode == CHASSIS_BIPEDAL) {
@@ -1274,7 +1278,7 @@ void ChassisReference(void)
             }
         } break;
         case CHASSIS_TRIPOD: {  //尾巴落地 扭矩控制
-            length = 0.185f + rc_length * RC_TO_ONE * 0.03f;
+            length = 0.17f + rc_length * RC_TO_ONE * 0.03f;
             // angle = rc_angle * RC_TO_ONE * 0.3f;
             // tail_angle = Get_beta(length, angle, CHASSIS.ref.body.pitch);
             // tail_angle = Get_beta(
@@ -1286,17 +1290,19 @@ void ChassisReference(void)
             // CHASSIS.ref.body.pitch = SolvePitchFromBeta0(
             //     CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg_state[0].theta,
             //     CHASSIS.fdb.leg[1].rod.L0, CHASSIS.fdb.leg_state[1].theta, CHASSIS.ref.body.pitch);
-            tail_angle = TAIL_BETA_INIT * PI / 180.0f;
+            tail_angle = -TAIL_BETA_INIT * PI / 180.0f;
 
             // 用当前反馈腿长、腿角，反解 pitch
             // SolvePitchBeta5Simple(
             //     length, angle, CHASSIS.ref.body.pitch, &CHASSIS.ref.body.pitch);
             // SolveThetaBetaSimple(length, CHASSIS.ref.body.pitch, &angle, &CHASSIS.ref.body.pitch);
-            SolveThetaBetaBodyCenter(length,  CHASSIS.ref.body.pitch, &angle, &CHASSIS.ref.body.pitch);
+            // SolveThetaBetaBodyCenter(length,  CHASSIS.ref.body.pitch, &angle, &CHASSIS.ref.body.pitch);
             // if (last_mode == CHASSIS_BIPEDAL) {
             //     CHASSIS.fdb.body.x = 0.0f;
             //     last_mode = CHASSIS_TRIPOD;
             // }
+            CHASSIS.ref.body.pitch =-10.0 * PI / 180.0f;
+
 
             angle += rc_angle * RC_TO_ONE * 0.3f;
         } break;
@@ -1384,6 +1390,7 @@ static void LocomotionController_Pro_Bipedal(void);
 static void LocomotionController_Tripod(void);
 static void LocomotionController_Pro_Tripod(void);
 static void LocomotionController_ProX_Tripod(void);
+static void LocomotionController_Tripod_hunong(void);
 // static void LegPositionController(void);
 static void LegTorqueController(void);
 static float LegFeedForward(float theta);
@@ -1633,7 +1640,7 @@ float Get_Tt0_Tripod(float l)
 }
 
 /**
- * @brief      运动控制器 尾巴触地模式Pro版——VMC 现在在用的版本
+ * @brief      运动控制器 尾巴触地模式Pro版——VMC 
  */
 static void LocomotionController_ProX_Tripod(void)
 {
@@ -1734,6 +1741,80 @@ static void LocomotionController_ProX_Tripod(void)
     // 维持腿长在范围内
     CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
 }
+
+/**
+ * @brief      运动控制器 尾巴触地模式Pro版——糊弄 现在在用的版本
+ */
+static void LocomotionController_Tripod_hunong(void)
+{
+    // 计算LQR增益=============================================
+    float k[5][12];
+    float x[12];
+    float Tp_T_Tt[5];
+    float theta_eq[4];
+    float T0_eq[2];
+    bool is_take_off = CHASSIS.fdb.leg[0].is_take_off || CHASSIS.fdb.leg[1].is_take_off;
+#if LIFTED_UP
+    is_take_off = true;
+#endif
+    // if (CHASSIS.step == JUMP_STEP_RECOVERY) {
+    //     is_take_off = true;
+    // }
+
+    // LQR 计算
+    GetK_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, k, is_take_off);
+    GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
+    GetT0_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
+
+    CHASSIS.ref.rod_Angle[0] += theta_eq[0];
+    CHASSIS.ref.rod_Angle[1] += theta_eq[1];
+
+    x[0] = X0_OFFSET + (CHASSIS.fdb.body.x - CHASSIS.ref.body.x);
+    x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
+    x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
+    x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
+    x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.rod_Angle[0]);
+    x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot - 0.0f);
+    x[6] = X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.rod_Angle[1]);
+    x[7] = X7_OFFSET + (CHASSIS.fdb.leg_state[1].theta_dot - 0.0f);
+    x[8] = X8_OFFSET + (CHASSIS.fdb.body.phi - CHASSIS.ref.body.pitch);
+    x[9] = X9_OFFSET + (CHASSIS.fdb.body.phi_dot - 0.0f);
+    x[10] = X10_OFFSET + (CHASSIS.fdb.tail_state.beta - CHASSIS.ref.tail_state.beta);
+    x[11] = X11_OFFSET + (CHASSIS.fdb.tail_state.beta_dot - CHASSIS.ref.tail_state.beta_dot);
+    CalcLQR_Pro_Tail(k, x, Tp_T_Tt);
+
+    CHASSIS.cmd.leg[0].rod.Tp = Tp_T_Tt[1] + T0_eq[0];
+    CHASSIS.cmd.leg[1].rod.Tp = Tp_T_Tt[0] + T0_eq[0];
+
+    CHASSIS.cmd.leg[0].wheel.T = Tp_T_Tt[3];
+    CHASSIS.cmd.leg[1].wheel.T = Tp_T_Tt[2];
+
+    CHASSIS.cmd.tail.Tt = Tp_T_Tt[4] + T0_eq[1];
+
+    // ROLL角控制=============================================
+    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
+    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+
+    // float e_beta = CHASSIS.ref.tail_state.beta - CHASSIS.fdb.tail_state.beta;
+    // float tail_z_comp;
+
+    // if (e_beta > 0.17f)
+    //     counter_beta++;
+    // else
+    //     counter_beta = 0;
+    // if (counter_beta > 200)
+    //     tail_z_comp = PID_calc(&CHASSIS.pid.tail_comp, e_beta, 0);
+    // else
+    //     tail_z_comp = 0.0f;
+
+    // PID补偿稳态误差 + roll角速度阻尼
+    float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
+    // CHASSIS.ref.rod_L0[0] += (-tail_z_comp);
+    // CHASSIS.ref.rod_L0[1] += (-tail_z_comp);
+    // 维持腿长在范围内
+    CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
+}
+
 
 /**
  * @brief      运动控制器 尾巴离地模式Pro版——LQR
@@ -2350,12 +2431,18 @@ static void ConsoleBipedal(void)  //尾离地
 
 static void ConsoleTripod(void)
 {
-    if (false) LocomotionController_Pro_Tripod();
+    // if (false) LocomotionController_Pro_Tripod();
 
-    if (PRO_CONTROLLER) LocomotionController_ProX_Tripod();
-    // LocomotionController_ProX_Tripod();
-    else
+    // if (PRO_CONTROLLER) LocomotionController_ProX_Tripod();
+    // else
+    //     LocomotionController_Tripod();
+    if(0)//编译器设定函数未使用会报错
+    {
+        LocomotionController_Pro_Tripod();
+        LocomotionController_ProX_Tripod();
         LocomotionController_Tripod();
+    }
+    LocomotionController_Tripod_hunong();
     LegTorqueController();
 
     // 给关节电机赋值 待验证
