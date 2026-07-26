@@ -343,7 +343,7 @@
 // 腿长跟踪长度环PID参数（左腿 leg0）
 #define KP_CHASSIS_LEG_LENGTH_LENGTH_L        (600.0f)
 #define KI_CHASSIS_LEG_LENGTH_LENGTH_L        (0.7f)
-#define KD_CHASSIS_LEG_LENGTH_LENGTH_L        (1500.0f)
+#define KD_CHASSIS_LEG_LENGTH_LENGTH_L        (2000.0f)
 #define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_L  (40.0f)
 #define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_L   (80.0f)
 #define N_LEG_LENGTH_LENGTH_L                 (0.1f)
@@ -354,7 +354,7 @@
 // 左右腿因机械装配差异可独立调参
 #define KP_CHASSIS_LEG_LENGTH_LENGTH_R        (600.0f)
 #define KI_CHASSIS_LEG_LENGTH_LENGTH_R        (0.7f)
-#define KD_CHASSIS_LEG_LENGTH_LENGTH_R        (1500.0f)
+#define KD_CHASSIS_LEG_LENGTH_LENGTH_R        (1200.0f)
 #define MAX_IOUT_CHASSIS_LEG_LENGTH_LENGTH_R  (40.0f)
 #define MAX_OUT_CHASSIS_LEG_LENGTH_LENGTH_R   (80.0f)
 #define N_LEG_LENGTH_LENGTH_R                 (0.1f)

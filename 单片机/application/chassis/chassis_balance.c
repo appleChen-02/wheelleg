@@ -408,6 +408,12 @@ static void ResetXStateOnModeSwitch(void)
     PID_clear(&CHASSIS.pid.vel_add);
     PID_clear(&CHASSIS.pid.wheel_stop[0]);
     PID_clear(&CHASSIS.pid.wheel_stop[1]);
+
+    // 腿长控制PID也清掉，避免积分残留
+    PID_clear(&CHASSIS.pid.leg_length_length[0]);
+    PID_clear(&CHASSIS.pid.leg_length_length[1]);
+    PID_clear(&CHASSIS.pid.leg_length_speed[0]);
+    PID_clear(&CHASSIS.pid.leg_length_speed[1]);
 }
 
 /**
