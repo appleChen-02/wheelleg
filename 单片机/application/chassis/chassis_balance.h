@@ -111,8 +111,9 @@ typedef struct Body
     float phi;       // 机体横滚/摆动相关角度
     float phi_dot;   // 机体横滚/摆动角速度
 
-    float roll;      // 横滚角
-    float roll_dot;  // 横滚角速度
+    float roll;        // 横滚角
+    float roll_dot;    // 横滚角速度
+    float smooth_roll; // 横滚角（IMU Kalman平滑值，供腿长控制用）
     float pitch;     // 俯仰角
     float pitch_dot; // 俯仰角速度
     float yaw;       // 航向角

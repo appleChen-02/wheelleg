@@ -5,9 +5,10 @@
 
 typedef struct __Imu
 {
-    float angle[3];  // rad 欧拉角数据
-    float gyro[3];   // rad/s 陀螺仪数据
-    float accel[3];  // m/s^2 加速度计数据
+    float angle[3];         // rad 欧拉角数据（原始值）
+    float gyro[3];          // rad/s 陀螺仪数据
+    float accel[3];         // m/s^2 加速度计数据
+    float angle_smooth[3];  // rad 平滑欧拉角（仅roll轴经Kalman平滑，pitch/yaw同原始值）
 } Imu_t;
 
 typedef struct  // 底盘速度向量结构体

@@ -538,6 +538,7 @@ static void UpdateBodyStatus(void)  //主要是imu和磁力计那些
     // 更新陀螺仪反馈数据
     CHASSIS.fdb.body.roll = GetImuAngle(AX_ROLL);
     CHASSIS.fdb.body.roll_dot = GetImuVelocity(AX_ROLL);
+    CHASSIS.fdb.body.smooth_roll = GetImuAngleSmooth(AX_ROLL);
 
     CHASSIS.fdb.body.pitch = GetImuAngle(AX_PITCH);
     CHASSIS.fdb.body.pitch_dot = GetImuVelocity(AX_PITCH);
@@ -1798,8 +1799,8 @@ static void LocomotionController_Tripod_hunong(void)
     CHASSIS.cmd.tail.Tt = Tp_T_Tt[4] + T0_eq[1];
 
     // ROLL角控制=============================================
-    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
-    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用IMU Kalman平滑后的roll值，替代原有低通滤波，抑制IMU运动噪声
+    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.fdb.body.smooth_roll, CHASSIS.ref.body.roll);
 
     // float e_beta = CHASSIS.ref.tail_state.beta - CHASSIS.fdb.tail_state.beta;
     // float tail_z_comp;
@@ -2103,8 +2104,8 @@ static void LocomotionController_Pro_Bipedal(void)
     CHASSIS.cmd.tail.Tt = Tp_T_Tt[4] + T0_eq[1];
 
     // ROLL角控制=============================================
-    // 使用低通滤波后的roll值和腿长差,抑制IMU运动噪声和正反馈引起的指令振荡
-    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.lpf.roll.out, CHASSIS.ref.body.roll);
+    // 使用IMU Kalman平滑后的roll值，替代原有低通滤波，抑制IMU运动噪声
+    float L_diff = CalcLegLengthDiff(CHASSIS.lpf.leg_diff.out, CHASSIS.fdb.body.smooth_roll, CHASSIS.ref.body.roll);
 
     // float e_beta = CHASSIS.ref.tail_state.beta - CHASSIS.fdb.tail_state.beta;
     // float tail_z_comp;

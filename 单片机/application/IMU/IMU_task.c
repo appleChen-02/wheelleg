@@ -85,6 +85,9 @@ static void imu_mag_yaw_fuse(const fp32 mag[3]);
 
 static void UpdateImuData(void);
 
+static void roll_smoother_init(fp32 initial_roll);
+static fp32 roll_smoother_update(fp32 raw_roll, fp32 raw_roll_rate);
+
 extern SPI_HandleTypeDef hspi1;
 
 
@@ -140,6 +143,34 @@ fp32 INS_angle_last[3] = {0.0f, 0.0f, 0.0f};
 
 static Imu_t IMU_DATA = {0.0f};
 
+/*
+ * Roll second-order inverse observer.
+ * State: [theta, theta_dot, theta_wheel, theta_wheel_dot]. theta is the
+ * desired smooth body roll; theta_wheel is the measured roll after the wheel
+ * spring-damper system. Only theta_wheel is measured.
+ *
+ * Identification parameters: replace ROLL_WHEEL_NATURAL_FREQ and
+ * ROLL_WHEEL_DAMPING_RATIO with values identified from the A-to-B test.
+ * wn is in rad/s and damping ratio is dimensionless. Q/R are variances and
+ * may be tuned after the physical model has been identified.
+ */
+#define ROLL_WHEEL_NATURAL_FREQ 25.53f  /* identified wn [rad/s] */
+#define ROLL_WHEEL_DAMPING_RATIO 0.154f /* identified damping ratio */
+#define ROLL_KF_MEASUREMENT_VAR  1.1e-2f
+#define ROLL_KF_ROLL_RATE_MEASUREMENT_VAR 1.0e-3f
+#define ROLL_KF_SMOOTH_ANGLE_Q   1.0e-7f
+#define ROLL_KF_SMOOTH_RATE_Q    1.0e-3f
+#define ROLL_KF_WHEEL_ANGLE_Q    1.0e-7f
+#define ROLL_KF_WHEEL_RATE_Q     1.0e-3f
+
+static struct
+{
+    fp32 x[4];
+    fp32 p[4][4];
+    fp32 last_raw_roll;
+    uint8_t initialized;
+} roll_smoother;
+
 static fp32 board_rotate_matrix[3][3] = {__BOARD_INSTALL_SPIN_MATRIX};
 
 /**
@@ -194,6 +225,7 @@ void IMU_task(void const * pvParameters)
 
     gEstimateKF_Init(1, 2000);
     IMU_QuaternionEKF_Init(2.0f, 0.001f, 3.0f, 0.999f);
+    roll_smoother_init(INS.angle[AX_X] - __ANGLE_OFFSET_ROLL);
     // R=3.0 (原10.0): 提升Kalman增益~3×, 加快扰动后收敛; λ=0.998 (原0.9996): 防协方差过度收敛
 
     while (1)
@@ -253,11 +285,160 @@ void IMU_task(void const * pvParameters)
     }
 }
 
+static void roll_smoother_init(fp32 initial_roll)
+{
+    uint8_t i, j;
+
+    for (i = 0; i < 4; i++)
+    {
+        roll_smoother.x[i] = 0.0f;
+        for (j = 0; j < 4; j++)
+        {
+            roll_smoother.p[i][j] = 0.0f;
+        }
+    }
+    roll_smoother.x[0] = initial_roll;
+    roll_smoother.x[2] = initial_roll;
+    roll_smoother.last_raw_roll = initial_roll;
+
+    for (i = 0; i < 4; i++)
+    {
+        roll_smoother.p[i][i] = 1.0f;
+    }
+    roll_smoother.initialized = 1;
+}
+
+static fp32 roll_smoother_update(fp32 raw_roll, fp32 raw_roll_rate)
+{
+    fp32 f[4][4] = {0};
+    fp32 fp[4][4] = {0};
+    fp32 p_minus[4][4] = {0};
+    fp32 k[4];
+    fp32 q[4] = {ROLL_KF_SMOOTH_ANGLE_Q, ROLL_KF_SMOOTH_RATE_Q,
+                 ROLL_KF_WHEEL_ANGLE_Q, ROLL_KF_WHEEL_RATE_Q};
+    fp32 x_minus[4] = {0};
+    fp32 raw_unwrapped, innovation, s, wn, zeta;
+    uint8_t i, j, n;
+
+    if (!roll_smoother.initialized)
+    {
+        roll_smoother_init(raw_roll);
+        return raw_roll;
+    }
+
+    /* Keep the filter continuous when the Euler roll representation wraps. */
+    raw_unwrapped = roll_smoother.last_raw_roll + wrap_pi(raw_roll - wrap_pi(roll_smoother.last_raw_roll));
+    roll_smoother.last_raw_roll = raw_unwrapped;
+
+    wn = ROLL_WHEEL_NATURAL_FREQ;
+    zeta = ROLL_WHEEL_DAMPING_RATIO;
+    f[0][0] = 1.0f;
+    f[0][1] = timing_time;
+    f[1][1] = 1.0f;
+    f[2][2] = 1.0f;
+    f[2][3] = timing_time;
+    f[3][0] = timing_time * wn * wn;
+    f[3][2] = -timing_time * wn * wn;
+    f[3][3] = 1.0f - 2.0f * timing_time * zeta * wn;
+
+    for (i = 0; i < 4; i++)
+    {
+        fp32 predicted = 0.0f;
+        for (j = 0; j < 4; j++)
+        {
+            predicted += f[i][j] * roll_smoother.x[j];
+        }
+        x_minus[i] = predicted;
+    }
+
+    for (i = 0; i < 4; i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            for (n = 0; n < 4; n++)
+            {
+                fp[i][j] += f[i][n] * roll_smoother.p[n][j];
+            }
+        }
+    }
+    for (i = 0; i < 4; i++)
+    {
+        for (j = 0; j < 4; j++)
+        {
+            for (n = 0; n < 4; n++)
+            {
+                p_minus[i][j] += fp[i][n] * f[j][n];
+            }
+        }
+        p_minus[i][i] += q[i];
+    }
+
+    s = p_minus[2][2] + ROLL_KF_MEASUREMENT_VAR;
+    if (s < 1.0e-9f)
+    {
+        s = 1.0e-9f;
+    }
+    for (i = 0; i < 4; i++)
+    {
+        k[i] = p_minus[i][2] / s;
+    }
+
+    innovation = raw_unwrapped - x_minus[2];
+    for (i = 0; i < 4; i++)
+    {
+        roll_smoother.x[i] = x_minus[i] + k[i] * innovation;
+        for (j = 0; j < 4; j++)
+        {
+            roll_smoother.p[i][j] = p_minus[i][j] - k[i] * p_minus[2][j];
+        }
+    }
+
+    /* Gyro roll rate directly observes the wheel-system output rate x[3].
+       It exposes the vibration direction before the roll angle reaches its
+       first peak, improving the inverse observer's early response. */
+    s = roll_smoother.p[3][3] + ROLL_KF_ROLL_RATE_MEASUREMENT_VAR;
+    if (s < 1.0e-9f)
+    {
+        s = 1.0e-9f;
+    }
+    for (i = 0; i < 4; i++)
+    {
+        k[i] = roll_smoother.p[i][3] / s;
+    }
+    innovation = raw_roll_rate - roll_smoother.x[3];
+    for (i = 0; i < 4; i++)
+    {
+        roll_smoother.x[i] += k[i] * innovation;
+        for (j = 0; j < 4; j++)
+        {
+            roll_smoother.p[i][j] -= k[i] * roll_smoother.p[3][j];
+        }
+    }
+
+    return wrap_pi(roll_smoother.x[0]);
+}
+
 static void UpdateImuData(void)
 {
     IMU_DATA.angle[AX_X] = INS.angle[AX_X] - __ANGLE_OFFSET_ROLL;
     IMU_DATA.angle[AX_Y] = INS.angle[AX_Y] - __ANGLE_OFFSET_PITCH;
     IMU_DATA.angle[AX_Z] = INS.angle[AX_Z] - __ANGLE_OFFSET_YAW;
+
+    /* 平滑角度：仅roll轴经过Kalman平滑处理，pitch/yaw沿用原始值 */
+    {
+        fp32 raw_roll = IMU_DATA.angle[AX_X];
+        fp32 roll_dot;
+
+        /* For ZYX Euler angles, gyro X alone equals roll_dot only near zero
+           pitch. Use the full kinematic relation for the rate measurement. */
+        roll_dot = INS_gyro[AX_X]
+                 + INS_gyro[AX_Y] * sinf(INS.angle[AX_X]) * tanf(INS.angle[AX_Y])
+                 + INS_gyro[AX_Z] * cosf(INS.angle[AX_X]) * tanf(INS.angle[AX_Y]);
+
+        IMU_DATA.angle_smooth[AX_X] = roll_smoother_update(raw_roll, roll_dot);
+        IMU_DATA.angle_smooth[AX_Y] = IMU_DATA.angle[AX_Y];
+        IMU_DATA.angle_smooth[AX_Z] = IMU_DATA.angle[AX_Z];
+    }
 
     IMU_DATA.gyro[AX_X] = INS_gyro[AX_X];
     IMU_DATA.gyro[AX_Y] = INS_gyro[AX_Y];
@@ -622,6 +803,12 @@ void DMA2_Stream2_IRQHandler(void)
   * @retval         (rad) axis轴的角度值
   */
 inline float GetImuAngle(uint8_t axis) { return IMU_DATA.angle[axis]; }
+/**
+  * @brief          获取平滑欧拉角（仅roll轴经Kalman平滑，pitch/yaw同原始值）
+  * @param[in]      axis:轴id，可配合定义好的轴id宏使用
+  * @retval         (rad) axis轴的平滑角度值
+  */
+inline float GetImuAngleSmooth(uint8_t axis) { return IMU_DATA.angle_smooth[axis]; }
 /**
   * @brief          获取角速度
   * @param[in]      axis:轴id，可配合定义好的轴id宏使用
