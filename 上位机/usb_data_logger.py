@@ -251,7 +251,7 @@ class CsvSink:
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
-            ["host_time_s", "tick_ms", "yaw", "pitch", "roll", "yaw_vel", "pitch_vel", "roll_vel"]
+            ["host_time_s", "tick_ms", "yaw", "pitch", "roll", "roll_smooth", "yaw_vel", "pitch_vel", "roll_vel"]
         )
         self.motion_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
         self.target_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
@@ -388,12 +388,12 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
     payload = frame[4:-2]
 
     # 下面的 struct 格式要和 usb_typdef.h 里的 packed 结构严格对应。
-    if pkt_id == ID_IMU and len(payload) == 28:
-        tick_ms, yaw, pitch, roll, yaw_vel, pitch_vel, roll_vel = struct.unpack("<I6f", payload)
+    if pkt_id == ID_IMU and len(payload) == 32:
+        tick_ms, yaw, pitch, roll, roll_smooth, yaw_vel, pitch_vel, roll_vel = struct.unpack("<I7f", payload)
         return {
             "type": "imu",
             "host_time": host_t,
-            "row": [tick_ms, yaw, pitch, roll, yaw_vel, pitch_vel, roll_vel],
+            "row": [tick_ms, yaw, pitch, roll, roll_smooth, yaw_vel, pitch_vel, roll_vel],
         }
 
     if pkt_id == ID_ROBOT_MOTION and len(payload) == ROBOT_SNAPSHOT_STRUCT.size:
@@ -481,7 +481,8 @@ def format_imu_line(row: Optional[List[float]], host_t: Optional[float]) -> str:
     return (
         f"IMU   : {ts} tick_ms={int(row[0])} "
         f"yaw={row[1]:.3f} pitch={row[2]:.3f} roll={row[3]:.3f} "
-        f"yaw_vel={row[4]:.3f} pitch_vel={row[5]:.3f} roll_vel={row[6]:.3f}"
+        f"roll_smooth={row[4]:.3f} "
+        f"yaw_vel={row[5]:.3f} pitch_vel={row[6]:.3f} roll_vel={row[7]:.3f}"
     )
 
 
@@ -574,7 +575,7 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
 
     # 这里导出的是“数值矩阵”，MATLAB 读取后可以直接用于绘图和滤波处理。
     mat_data = {
-        "imu": np.array(sink.imu_rows, dtype=float) if sink.imu_rows else np.empty((0, 8), dtype=float),
+        "imu": np.array(sink.imu_rows, dtype=float) if sink.imu_rows else np.empty((0, 9), dtype=float),
         "robot_motion": np.array(sink.motion_rows, dtype=float)
         if sink.motion_rows
         else np.empty((0, 23), dtype=float),
@@ -654,7 +655,8 @@ def run(args: argparse.Namespace) -> int:
                                 message = (
                                     f"[IMU] {ts} tick={int(row[0])} "
                                     f"yaw={row[1]:.3f} pitch={row[2]:.3f} roll={row[3]:.3f} "
-                                    f"yaw_vel={row[4]:.3f} pitch_vel={row[5]:.3f} roll_vel={row[6]:.3f}"
+                                    f"roll_smooth={row[4]:.3f} "
+                                    f"yaw_vel={row[5]:.3f} pitch_vel={row[6]:.3f} roll_vel={row[7]:.3f}"
                                 )
                                 realtime_emit_append(message, args)
                                 latest_display.update("imu", row, host_t)

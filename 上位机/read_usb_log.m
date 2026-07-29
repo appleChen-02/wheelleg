@@ -228,10 +228,9 @@ function plot_leg_vs_time(log, legIdx, axisLabelFontSize, tickFontSize, baseTick
 
     legxName = sprintf('leg%d_legx', legIdx);
     thetaName = sprintf('leg%d_theta', legIdx);
-    phiName = sprintf('leg%d_phi', legIdx);
 
-    requiredMotion = {'host_time_s', legxName, thetaName, phiName};
-    requiredTarget = {'host_time_s', legxName, thetaName, phiName};
+    requiredMotion = {'host_time_s', legxName, thetaName};
+    requiredTarget = {'host_time_s', legxName, thetaName};
 
     if ~all(ismember(requiredMotion, log.robot_motion.Properties.VariableNames))
         return;
@@ -247,7 +246,7 @@ function plot_leg_vs_time(log, legIdx, axisLabelFontSize, tickFontSize, baseTick
         legTitle = 'Right Leg';
     end
 
-    f = create_plot_figure(sprintf('%s (legx/theta/phi)', legTitle), figurePosition, baseTickCount);
+    f = create_plot_figure(sprintf('%s (legx/theta/roll\\_smooth)', legTitle), figurePosition, baseTickCount);
     tlo = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
     title(tlo, sprintf('%s: State vs Target', legTitle));
 
@@ -261,10 +260,28 @@ function plot_leg_vs_time(log, legIdx, axisLabelFontSize, tickFontSize, baseTick
     plot(tTarget, log.robot_target.(thetaName), 'r--', 'LineWidth', 1.0);
     grid on; style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true); ylabel('theta (rad)', 'FontSize', axisLabelFontSize); legend('state', 'target', 'Location', 'best');
 
+    % 第三子图: 平滑roll角 (替代原phi)，展示腿长控制的roll反馈量
     ax = nexttile;
-    plot(tMotion, log.robot_motion.(phiName), 'b-', 'LineWidth', 1.0); hold on;
-    plot(tTarget, log.robot_target.(phiName), 'r--', 'LineWidth', 1.0);
-    grid on; style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true); ylabel('phi (rad)', 'FontSize', axisLabelFontSize); xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize); legend('state', 'target', 'Location', 'best');
+    hasSmooth = isfield(log, 'imu') && ~isempty(log.imu) && ...
+                ismember('roll_smooth', log.imu.Properties.VariableNames);
+    if hasSmooth
+        tImu = double(log.imu.host_time_s(:));
+        tTar = double(log.robot_target.host_time_s(:));
+        t0 = min(first_finite_time(tImu), first_finite_time(tTar));
+        if ~isfinite(t0), t0 = 0; end
+        tImu = tImu - t0;
+        tTar = tTar - t0;
+
+        plot(tImu, log.imu.roll_smooth, 'b-', 'LineWidth', 1.0); hold on;
+        plot(tTar, log.robot_target.body_roll, 'r--', 'LineWidth', 1.0);
+        legend('state (smooth)', 'target', 'Location', 'best');
+    else
+        text(0.5, 0.5, 'roll\_smooth not available', ...
+            'HorizontalAlign', 'center', 'FontSize', tickFontSize);
+    end
+    grid on; style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true);
+    ylabel('roll\_smooth (rad)', 'FontSize', axisLabelFontSize);
+    xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize);
 end
 
 function plot_tail_body_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)

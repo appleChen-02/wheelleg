@@ -42,7 +42,9 @@ typedef struct
     {
         float yaw;    // rad
         float pitch;  // rad
-        float roll;   // rad
+        float roll;   // rad（原始值）
+
+        float roll_smooth; // rad（IMU Kalman平滑值）
 
         float yaw_vel;    // rad/s
         float pitch_vel;  // rad/s

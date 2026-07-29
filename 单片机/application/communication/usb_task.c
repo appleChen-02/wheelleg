@@ -403,6 +403,8 @@ static void UsbSendImuData(void)
     SEND_DATA_IMU.data.pitch = imu_data.angle[AX_Y];
     SEND_DATA_IMU.data.roll = imu_data.angle[AX_X];
 
+    SEND_DATA_IMU.data.roll_smooth = imu_data.angle_smooth[AX_X];
+
     SEND_DATA_IMU.data.yaw_vel = imu_data.gyro[AX_Z];
     SEND_DATA_IMU.data.pitch_vel = imu_data.gyro[AX_Y];
     SEND_DATA_IMU.data.roll_vel = imu_data.gyro[AX_X];
