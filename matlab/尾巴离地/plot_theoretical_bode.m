@@ -45,6 +45,9 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             A_num = ld.A_num;
             B_num = ld.B_num;
             K     = ld.K;
+            lqr_Q = ld.lqr_Q;
+            lqr_R = ld.lqr_R;
+
         else
             % 回退到 workspace
             fprintf('[plot_theoretical_bode] 未找到 .mat 文件，回退到 workspace\n');
@@ -66,6 +69,8 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             A_num = ld.A_num;
             B_num = ld.B_num;
             K     = ld.K;
+            lqr_Q = ld.lqr_Q;
+            lqr_R = ld.lqr_R;
         end
     end
 
@@ -78,6 +83,8 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
         A_num = evalin('base', 'A_num');
         B_num = evalin('base', 'B_num');
         K     = evalin('base', 'K');
+        lqr_Q = ld.lqr_Q;
+        lqr_R = ld.lqr_R;
     end
 
     if nargin < 4 || isempty(Fs)
@@ -86,6 +93,11 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
     if nargin < 5 || isempty(figurePosition)
         figurePosition = [100, 100, 1800, 900];
     end
+    fprintf('Q矩阵 (状态权重):\n');
+    disp(lqr_Q);
+    
+    fprintf('R矩阵 (控制权重):\n');
+    disp(lqr_R);
 
     %% ---- 检查闭环稳定性 ----
     Acl = A_num - B_num * K;
