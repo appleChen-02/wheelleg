@@ -7,7 +7,7 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
 %   对通道 i: G_i(s) = c_i * (sI - Acl)^(-1) * b_i
 %     其中 Acl = A - BK, b_i = (BK) 第i列, c_i = 第i位=1的行向量
 %
-% Usage:
+% Usage:    
 %   % 方式1：自动查找最新的 lqr_linear_model_*.mat
 %   theoretical_data = plot_theoretical_bode();
 %
@@ -162,6 +162,8 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             try
                 sys_i = ss(Acl, b_i, c_i, 0);
                 data.sys = sys_i;
+                data.poles = pole(sys_i);
+                data.zeros = zero(sys_i);
 
                 % 频率响应 (用 freqresp 而非 bode，以便精确控制频率点)
                 H = freqresp(sys_i, w_rad);
@@ -283,6 +285,42 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             linkaxes(allAxes, 'x');
             xlim(allAxes(1), [0.05, Fs/2]);
         end
+    end
+
+    %% ---- One zero-pole figure for each modeled tracking channel ----
+    modeledChs = find(cellfun(@(data) data.hasModel, theoretical_data.channels));
+    for k = 1:length(modeledChs)
+        data = theoretical_data.channels{modeledChs(k)};
+        zpTitle = sprintf('Zero-Pole Map  -  %s', data.name);
+        zpFigure = figure('Name', zpTitle, 'Color', 'w', 'Position', figurePosition);
+        ax = axes('Parent', zpFigure);
+        hold(ax, 'on');
+        xline(ax, 0, 'k:', 'LineWidth', 0.6);
+        yline(ax, 0, 'k:', 'LineWidth', 0.6);
+        hPoles = plot(ax, real(data.poles), imag(data.poles), 'rx', ...
+            'MarkerSize', 8, 'LineWidth', 1.5);
+        hZeros = plot(ax, real(data.zeros), imag(data.zeros), 'bo', ...
+            'MarkerSize', 7, 'LineWidth', 1.5);
+
+        locations = [data.poles(:); data.zeros(:)];
+        locations = locations(isfinite(locations));
+        axisLimit = max(abs([real(locations); imag(locations)]));
+        if isempty(axisLimit) || axisLimit == 0
+            axisLimit = 1;
+        else
+            axisLimit = 1.1 * axisLimit;
+        end
+
+        grid(ax, 'on');
+        axis(ax, 'equal');
+        xlim(ax, [-axisLimit, axisLimit]);
+        ylim(ax, [-axisLimit, axisLimit]);
+        title(ax, sprintf('%s  -  LQR Closed-loop', data.label), ...
+            'FontSize', axisLabelFontSize);
+        xlabel(ax, 'Real Axis (rad/s)', 'FontSize', axisLabelFontSize - 2);
+        ylabel(ax, 'Imaginary Axis (rad/s)', 'FontSize', axisLabelFontSize - 2);
+        set(ax, 'FontSize', tickFontSize);
+        legend(ax, [hPoles, hZeros], {'Poles', 'Zeros'}, 'Location', 'best');
     end
 
     %% ---- 打印汇总 ----
