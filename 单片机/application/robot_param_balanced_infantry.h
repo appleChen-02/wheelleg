@@ -165,6 +165,24 @@
  */
 #define WHEEL_SLIP_IMU_CORRECTION_ALPHA (0.02f)
 
+/*
+ * 双足 vx 参考轨迹器参数。速度指令先受 TRACK_TIME 限制得到目标加速度，
+ * 再受 ACCEL_MAX 和 JERK_MAX 限制后积分为 LQR 速度参考。该整形避免遥控
+ * 阶跃直接激励速度-俯仰慢耦合模态及非最小相位零点。
+ */
+#define VX_REF_TRACK_TIME       (0.20f)  /* s，速度误差转换为目标加速度的时间常数。 */
+#define VX_REF_ACCEL_MAX        (1.20f)  /* m/s^2，期望纵向加速度上限。 */
+#define VX_REF_JERK_MAX         (6.00f)  /* m/s^3，期望纵向加加速度上限。 */
+
+/*
+ * 双足纵向加速度前馈。前馈仅作为左右轮相同的共模扭矩叠加到原 LQR 输出，
+ * 不参与偏航差动、髋关节或尾巴控制。增益应从较小值开始实验整定；限幅和
+ * 变化率限制用于为 LQR、偏航和姿态控制预留轮端扭矩裕量。
+ */
+#define VX_ACCEL_FF_GAIN        (0.20f)  /* 每侧轮子 N*m/(m/s^2)。 */
+#define VX_ACCEL_FF_TORQUE_MAX  (0.60f)  /* 每侧轮子的前馈扭矩上限，N*m。 */
+#define VX_ACCEL_FF_TORQUE_RATE (6.00f)  /* 每侧轮子的前馈扭矩变化率上限，N*m/s。 */
+
 // v1.1
 // #define TAIL_COM_to_MOTOR    (0.17755f)
 // #define TAIL_BETA_COM_to_HAND    (0.065972f)

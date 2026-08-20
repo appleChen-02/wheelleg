@@ -106,6 +106,7 @@ ChassisMotionObserverOutput_t CHASSIS_MOTION_OBSERVER = {0};
 ChassisWheelSlipStatus_t CHASSIS_WHEEL_SLIP_STATUS = {
     .state = {WHEEL_SPEED_NORMAL, WHEEL_SPEED_NORMAL},
 };
+ChassisVxReferenceOutput_t CHASSIS_VX_REFERENCE = {0};
 
 typedef struct {
     bool inited;            /* 防止首次更新时产生错误的速度残差。 */
@@ -113,6 +114,15 @@ typedef struct {
 } WheelSlipRuntime_t;
 
 static WheelSlipRuntime_t WHEEL_SLIP_RUNTIME = {0};
+
+typedef struct {
+    bool inited;
+    float ax_ref;
+    float wheel_torque_ff;
+} VxReferenceRuntime_t;
+
+/* 双足参考整形器的内部状态；对外观测量通过 CHASSIS_VX_REFERENCE 给出。 */
+static VxReferenceRuntime_t VX_REFERENCE_RUNTIME = {0};
 
 Chassis_s CHASSIS = {
     .mode = CHASSIS_OFF,
@@ -139,6 +149,87 @@ void ChassisPublish(void)
 static void ResetXStateOnModeSwitch(void);
 static void UpdateWheelSlipDetection(float dt_s, float wheel_vx, float accel_bias);
 static void ResetWheelSlipDetection(float seed_velocity);
+static void ResetBipedalVxReference(float vx_seed);
+static void UpdateBipedalVxReference(float vx_cmd);
+static float UpdateBipedalWheelTorqueFeedforward(bool is_take_off);
+
+static void ResetBipedalVxReference(float vx_seed)
+{
+    /*
+     * 参考轨迹器与模式相关：切换模式时清除加速度和前馈扭矩，防止上一模式的
+     * 推进请求残留到双足模式。速度初值同时写入参考量，保证内部状态一致。
+     */
+    const float vx_limited = fp32_constrain(vx_seed, MIN_SPEED_VECTOR_VX, MAX_SPEED_VECTOR_VX);
+    memset(&VX_REFERENCE_RUNTIME, 0, sizeof(VX_REFERENCE_RUNTIME));
+    VX_REFERENCE_RUNTIME.inited = true;
+    CHASSIS.ref.speed_vector.vx = vx_limited;
+    CHASSIS_VX_REFERENCE.vx_cmd = vx_limited;
+    CHASSIS_VX_REFERENCE.vx_ref = vx_limited;
+    CHASSIS_VX_REFERENCE.ax_ref = 0.0f;
+    CHASSIS_VX_REFERENCE.wheel_torque_ff = 0.0f;
+}
+
+static void UpdateBipedalVxReference(float vx_cmd)
+{
+    const float dt = CHASSIS_CONTROL_TIME_S;
+    float vx_ref;
+    float ax_target;
+    float next_vx_ref;
+
+    if (!VX_REFERENCE_RUNTIME.inited) {
+        ResetBipedalVxReference(CHASSIS.ref.speed_vector.vx);
+    }
+
+    vx_cmd = fp32_constrain(vx_cmd, MIN_SPEED_VECTOR_VX, MAX_SPEED_VECTOR_VX);
+    vx_ref = CHASSIS.ref.speed_vector.vx;
+
+    /*
+     * 先将速度误差转换为有界目标加速度，再限制加速度的变化率。该二阶轨迹器
+     * 避免遥控速度阶跃直接进入 LQR，从而降低对慢耦合模态和右半平面零点的激励。
+     */
+    ax_target = fp32_constrain(
+        (vx_cmd - vx_ref) / VX_REF_TRACK_TIME, -VX_REF_ACCEL_MAX, VX_REF_ACCEL_MAX);
+    VX_REFERENCE_RUNTIME.ax_ref += fp32_constrain(
+        ax_target - VX_REFERENCE_RUNTIME.ax_ref,
+        -VX_REF_JERK_MAX * dt, VX_REF_JERK_MAX * dt);
+
+    next_vx_ref = vx_ref + VX_REFERENCE_RUNTIME.ax_ref * dt;
+
+    /* 到达目标时截断积分并清除加速度，防止离散积分越过速度指令。 */
+    if ((vx_cmd - vx_ref) * (vx_cmd - next_vx_ref) <= 0.0f) {
+        next_vx_ref = vx_cmd;
+        VX_REFERENCE_RUNTIME.ax_ref = 0.0f;
+    }
+
+    CHASSIS.ref.speed_vector.vx =
+        fp32_constrain(next_vx_ref, MIN_SPEED_VECTOR_VX, MAX_SPEED_VECTOR_VX);
+    CHASSIS_VX_REFERENCE.vx_cmd = vx_cmd;
+    CHASSIS_VX_REFERENCE.vx_ref = CHASSIS.ref.speed_vector.vx;
+    CHASSIS_VX_REFERENCE.ax_ref = VX_REFERENCE_RUNTIME.ax_ref;
+}
+
+static float UpdateBipedalWheelTorqueFeedforward(bool is_take_off)
+{
+    const float dt = CHASSIS_CONTROL_TIME_S;
+    const bool wheel_trustworthy = !is_take_off &&
+        CHASSIS_WHEEL_SLIP_STATUS.slip_mask == 0U;
+    float torque_target = 0.0f;
+
+    /*
+     * 仅在双腿接地且未检出打滑时前馈推进力矩。前馈在异常时平滑退回零，而非
+     * 突然切断，既不以异常轮速继续驱动，也不在轮端产生额外的扭矩阶跃。
+     */
+    if (wheel_trustworthy) {
+        torque_target = fp32_constrain(
+            VX_ACCEL_FF_GAIN * VX_REFERENCE_RUNTIME.ax_ref,
+            -VX_ACCEL_FF_TORQUE_MAX, VX_ACCEL_FF_TORQUE_MAX);
+    }
+    VX_REFERENCE_RUNTIME.wheel_torque_ff += fp32_constrain(
+        torque_target - VX_REFERENCE_RUNTIME.wheel_torque_ff,
+        -VX_ACCEL_FF_TORQUE_RATE * dt, VX_ACCEL_FF_TORQUE_RATE * dt);
+    CHASSIS_VX_REFERENCE.wheel_torque_ff = VX_REFERENCE_RUNTIME.wheel_torque_ff;
+    return VX_REFERENCE_RUNTIME.wheel_torque_ff;
+}
 
 /******************************************************************/
 /* Init                                                           */
@@ -186,6 +277,7 @@ void ChassisInit(void)
     memset(&CHASSIS.ref, 0, sizeof(CHASSIS.ref));
     /* 使对外诊断值和打滑参考状态与已清零的反馈状态保持一致。 */
     memset(&CHASSIS_MOTION_OBSERVER, 0, sizeof(CHASSIS_MOTION_OBSERVER));
+    ResetBipedalVxReference(0.0f);
     ResetWheelSlipDetection(0.0f);
 
     CHASSIS.fdb.leg[0].is_take_off = false;
@@ -444,6 +536,7 @@ static void ResetXStateOnModeSwitch(void)
     OBSERVER.body.motion_kf.P_data[5] = 0.04f;
     OBSERVER.body.motion_kf.P_data[10] = 0.25f;
     OBSERVER.body.motion_kf.P_data[15] = 0.01f;
+    ResetBipedalVxReference(0.0f);
     ResetWheelSlipDetection(0.0f);
 
     // 和x相关的PID也顺手清一下，避免积分残留
@@ -1506,7 +1599,13 @@ void ChassisReference(void)
             float vx_cmd = v_set.vx;
 
             // 一阶低通后的速度期望
-            CHASSIS.ref.speed_vector.vx += VX_REF_ALPHA * (vx_cmd - CHASSIS.ref.speed_vector.vx);
+            if (CHASSIS.mode == CHASSIS_BIPEDAL) {
+                UpdateBipedalVxReference(vx_cmd);
+            } else {
+                /* 保持非双足模式原有的一阶速度参考滤波行为。 */
+                CHASSIS.ref.speed_vector.vx += VX_REF_ALPHA *
+                    (vx_cmd - CHASSIS.ref.speed_vector.vx);
+            }
             CHASSIS.ref.speed_vector.vy = 0;
             CHASSIS.ref.speed_vector.wz = v_set.wz;
             CHASSIS.ref.body.yaw += CHASSIS.ref.speed_vector.wz * CHASSIS_CONTROL_TIME_S;
@@ -1518,7 +1617,7 @@ void ChassisReference(void)
         case CHASSIS_SAFE:
         case CHASSIS_OFF:
         default: {
-            CHASSIS.ref.speed_vector.vx = 0;
+            ResetBipedalVxReference(0.0f);
             CHASSIS.ref.speed_vector.vy = 0;
             CHASSIS.ref.speed_vector.wz = 0;
             CHASSIS.ref.body.yaw = 0;
@@ -2353,6 +2452,11 @@ static void LocomotionController_Pro_Bipedal(void)
     CHASSIS.ref.rod_Angle[1] += theta_eq[1];
 
     x[0] = X0_OFFSET + (CHASSIS.fdb.body.x - CHASSIS.ref.body.x);
+    /*
+     * 双足 LQR 的纵向速度误差使用 BodyMotionObserve 输出的融合速度。
+     * 该值已经综合轮速、IMU 加速度和在线加速度零偏估计；轮速打滑或腾空时，
+     * 观测器会自动降低轮速权重，避免异常轮速直接污染 LQR 反馈。
+     */
     x[1] = X1_OFFSET + (CHASSIS.fdb.body.x_dot_obv - CHASSIS.ref.speed_vector.vx);
     x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
@@ -2369,8 +2473,13 @@ static void LocomotionController_Pro_Bipedal(void)
     CHASSIS.cmd.leg[0].rod.Tp = Tp_T_Tt[1] + T0_eq[0];
     CHASSIS.cmd.leg[1].rod.Tp = Tp_T_Tt[0] + T0_eq[0];
 
-    CHASSIS.cmd.leg[0].wheel.T = Tp_T_Tt[3];
-    CHASSIS.cmd.leg[1].wheel.T = Tp_T_Tt[2];
+    /*
+     * 纵向加速度前馈只进入左右轮共模通道。左右轮同时增加相同扭矩不会主动
+     * 产生偏航力矩；原 LQR 仍负责腿部、俯仰、尾巴和主要的轮端稳定反馈。
+     */
+    const float wheel_torque_ff = UpdateBipedalWheelTorqueFeedforward(is_take_off);
+    CHASSIS.cmd.leg[0].wheel.T = Tp_T_Tt[3] + wheel_torque_ff;
+    CHASSIS.cmd.leg[1].wheel.T = Tp_T_Tt[2] + wheel_torque_ff;
 
     CHASSIS.cmd.tail.Tt = Tp_T_Tt[4] + T0_eq[1];
 

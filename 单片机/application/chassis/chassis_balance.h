@@ -371,9 +371,19 @@ typedef struct {
     uint32_t state_time_ms[2];        /* 在各自当前状态中累计的时间，ms。 */
 } ChassisWheelSlipStatus_t;
 
-/* 对外调试快照，每个底盘观测器周期更新一次。 */
+typedef struct {
+    float vx_cmd;          /* 原始速度指令，m/s。 */
+    float vx_ref;          /* 整形后送入双足 LQR 的速度参考，m/s。 */
+    float ax_ref;          /* 整形器输出的纵向加速度参考，m/s^2。 */
+    float wheel_torque_ff; /* 叠加到每侧轮子的共模前馈扭矩，N*m。 */
+} ChassisVxReferenceOutput_t;
+
+/* 对外观测器调试快照，每个底盘观测器周期更新一次。 */
 extern ChassisMotionObserverOutput_t CHASSIS_MOTION_OBSERVER;
 extern ChassisWheelSlipStatus_t CHASSIS_WHEEL_SLIP_STATUS;
+
+/* 对外双足速度参考快照，每个参考生成周期更新一次。 */
+extern ChassisVxReferenceOutput_t CHASSIS_VX_REFERENCE;
 
 /*-------------------- Public interfaces --------------------*/
 // 初始化底盘相关状态、滤波器和控制器参数
