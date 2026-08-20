@@ -106,6 +106,65 @@
 
 #endif
 
+/*
+ * 机体运动 KF 状态：[vx (m/s), accel_bias (m/s^2),
+ * wz (rad/s), gyro_bias (rad/s)]。Q 为每秒过程噪声，实际使用时乘以
+ * 任务周期。增大某一项会使对应状态更快跟随新测量，但估计结果也会更不平滑。
+ */
+#define MOTION_Q_VX                 (0.20f)
+#define MOTION_Q_ACCEL_BIAS         (0.0025f)
+#define MOTION_Q_WZ                 (0.40f)
+#define MOTION_Q_GYRO_BIAS          (0.0004f)
+
+/* 标称测量方差：轮速推导的 vx/wz 以及 IMU 偏航角速度。 */
+#define MOTION_R_WHEEL_VX           (0.0025f)
+#define MOTION_R_WHEEL_WZ           (0.0100f)
+#define MOTION_R_GYRO_WZ            (0.0004f)
+
+/*
+ * 轮速测量 R 的倍率。增大 R 会降低该测量的卡尔曼增益，而不是突兀地删除
+ * 该测量。AIRBORNE 的倍率显著更大，因为此时两个轮子均无法代表地面运动；
+ * 在重新接触地面前，由 IMU 和预测模型维持状态估计。
+ */
+#define MOTION_R_DEGRADED_SCALE     (100.0f)
+#define MOTION_R_AIRBORNE_SCALE     (10000.0f)
+
+/*
+ * 静止判定阈值：实测运动和期望运动均低于这些值时，才将零轮速作为高置信度
+ * 观测量。该约束可防止底盘停放时速度及零偏持续漂移。
+ */
+#define MOTION_STILL_VX             (0.03f)  /* m/s */
+#define MOTION_STILL_WZ             (0.05f)  /* rad/s */
+#define MOTION_STILL_ACCEL          (0.30f)  /* m/s^2 */
+
+/* 轮速偏航角速度与扣除零偏后的陀螺偏航角速度的最大允许差值，超过后降低轮速权重。 */
+#define MOTION_WHEEL_GYRO_DISAGREE  (1.00f)  /* rad/s */
+
+/*
+ * 单轮打滑检测使能条件。仅在期望平移速度足够大、偏航需求较小且不处于制动瞬态时
+ * 启用检测，避免将正常转向、制动或腾空时的轮速变化误判为纵向轮胎打滑。
+ */
+#define WHEEL_SLIP_VX_MIN               (0.10f)  /* m/s */
+#define WHEEL_SLIP_WZ_MAX               (1.50f)  /* rad/s */
+#define WHEEL_SLIP_DRIVE_TORQUE_MIN_NM  (0.80f)  /* N*m */
+
+/*
+ * 进入和退出使用不同的速度残差阈值 (m/s)，形成迟滞。残差必须持续
+ * CONFIRM_MS 才进入 SLIPPING；恢复后仍在 RECOVERY_MS 内保持降权，
+ * 防止一次含噪观测周期就将轮速恢复为完全可信。
+ */
+#define WHEEL_SLIP_ENTER_SPEED_MPS      (0.30f)
+#define WHEEL_SLIP_EXIT_SPEED_MPS       (0.18f)
+#define WHEEL_SLIP_BRAKE_ACCEL_MAX      (0.50f)  /* m/s^2 */
+#define WHEEL_SLIP_CONFIRM_MS           (80U)
+#define WHEEL_SLIP_RECOVERY_MS          (250U)
+
+/*
+ * 两侧轮速均正常时，使用这个很小的互补校正限制短时 IMU 积分速度漂移。
+ * 该系数必须足够小，避免短暂漏检的打滑将检测参考速度拉向打滑轮速。
+ */
+#define WHEEL_SLIP_IMU_CORRECTION_ALPHA (0.02f)
+
 // v1.1
 // #define TAIL_COM_to_MOTOR    (0.17755f)
 // #define TAIL_BETA_COM_to_HAND    (0.065972f)

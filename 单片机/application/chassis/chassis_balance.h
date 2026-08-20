@@ -325,9 +325,55 @@ typedef struct
 {
     struct
     {
-        KalmanFilter_t v_kf;  // 观测车体速度
+        /*
+         * 四维机体运动滤波器。状态顺序固定，因为 C 文件会按下标写入 F/H/Q/R
+         * 并读取 xhat：[纵向速度、加速度计零偏、偏航角速度、陀螺仪零偏]。
+         */
+        KalmanFilter_t motion_kf;
     } body;
 } Observer_t;
+
+typedef enum {
+    WHEEL_SPEED_NORMAL = 0,  /* 轮速正常可信，使用标称测量权重。 */
+    WHEEL_SPEED_SUSPECT,     /* 打滑候选需持续一段时间才确认。 */
+    WHEEL_SPEED_SLIPPING,    /* 已确认打滑，轮速观测正在降权。 */
+    WHEEL_SPEED_RECOVERY,    /* 打滑后保持降权，避免过早恢复可信。 */
+} WheelSpeedTrustState_e;
+
+typedef enum {
+    CHASSIS_OBSERVER_HEALTH_OK = 0,
+    /* 单侧腾空、打滑，或轮速偏航与 IMU 不一致。 */
+    CHASSIS_OBSERVER_HEALTH_WHEEL_DEGRADED = 1U << 0,
+    /* 两侧均腾空，轮速测量将被近似忽略。 */
+    CHASSIS_OBSERVER_HEALTH_AIRBORNE = 1U << 1,
+    /* 主动注入零速度/零偏航观测，以约束静止时的漂移。 */
+    CHASSIS_OBSERVER_HEALTH_STATIONARY = 1U << 2,
+    /* 矩阵运算或状态值无效，已写入有界的回退初值。 */
+    CHASSIS_OBSERVER_HEALTH_NUMERIC_FALLBACK = 1U << 3,
+} ChassisObserverHealth_e;
+
+typedef struct {
+    float vx;                  /* 融合后的纵向速度，m/s。 */
+    float accel_bias;          /* 在线估计的加速度计 x 轴零偏，m/s^2。 */
+    float wz;                  /* 融合后的底盘偏航角速度，rad/s。 */
+    float gyro_bias;           /* 在线估计的 IMU 偏航角速度零偏，rad/s。 */
+    float covariance_diag[4];  /* 按上述状态顺序排列的 P 矩阵对角线。 */
+    float wheel_vx;            /* 原始左右轮平均速度，m/s。 */
+    float wheel_wz;            /* 原始差速轮速推导的偏航角速度，rad/s。 */
+    uint8_t health;            /* ChassisObserverHealth_e 标志位的按位或。 */
+} ChassisMotionObserverOutput_t;
+
+typedef struct {
+    WheelSpeedTrustState_e state[2];  /* [左、右] 轮速状态机状态。 */
+    uint8_t slip_mask;                /* SLIPPING 或 RECOVERY 时置位第 i 位。 */
+    float slip_speed[2];              /* |轮速 - IMU 参考速度|，m/s。 */
+    float imu_velocity;               /* 扣除零偏后的加速度积分速度，m/s。 */
+    uint32_t state_time_ms[2];        /* 在各自当前状态中累计的时间，ms。 */
+} ChassisWheelSlipStatus_t;
+
+/* 对外调试快照，每个底盘观测器周期更新一次。 */
+extern ChassisMotionObserverOutput_t CHASSIS_MOTION_OBSERVER;
+extern ChassisWheelSlipStatus_t CHASSIS_WHEEL_SLIP_STATUS;
 
 /*-------------------- Public interfaces --------------------*/
 // 初始化底盘相关状态、滤波器和控制器参数

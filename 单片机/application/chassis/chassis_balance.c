@@ -101,6 +101,18 @@ uint8_t g_motor_offline_mask = 0;
     }
 
 static Observer_t OBSERVER;
+/* 对外调试快照：每次观测器更新后可供调试器或遥测读取。 */
+ChassisMotionObserverOutput_t CHASSIS_MOTION_OBSERVER = {0};
+ChassisWheelSlipStatus_t CHASSIS_WHEEL_SLIP_STATUS = {
+    .state = {WHEEL_SPEED_NORMAL, WHEEL_SPEED_NORMAL},
+};
+
+typedef struct {
+    bool inited;            /* 防止首次更新时产生错误的速度残差。 */
+    float last_ref_speed;   /* 上一周期 vx 期望值，用于计算 ref_accel。 */
+} WheelSlipRuntime_t;
+
+static WheelSlipRuntime_t WHEEL_SLIP_RUNTIME = {0};
 
 Chassis_s CHASSIS = {
     .mode = CHASSIS_OFF,
@@ -125,6 +137,8 @@ void ChassisPublish(void)
     ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 static void ResetXStateOnModeSwitch(void);
+static void UpdateWheelSlipDetection(float dt_s, float wheel_vx, float accel_bias);
+static void ResetWheelSlipDetection(float seed_velocity);
 
 /******************************************************************/
 /* Init                                                           */
@@ -170,6 +184,9 @@ void ChassisInit(void)
     /*-------------------- 值归零 --------------------*/
     memset(&CHASSIS.fdb, 0, sizeof(CHASSIS.fdb));
     memset(&CHASSIS.ref, 0, sizeof(CHASSIS.ref));
+    /* 使对外诊断值和打滑参考状态与已清零的反馈状态保持一致。 */
+    memset(&CHASSIS_MOTION_OBSERVER, 0, sizeof(CHASSIS_MOTION_OBSERVER));
+    ResetWheelSlipDetection(0.0f);
 
     CHASSIS.fdb.leg[0].is_take_off = false;
     CHASSIS.fdb.leg[1].is_take_off = false;
@@ -316,19 +333,38 @@ void ChassisInit(void)
     LowPassFilterInit(&CHASSIS.lpf.roll, CHASSIS_ROLL_ALPHA);
     LowPassFilterInit(&CHASSIS.lpf.leg_diff, LEG_DIFF_LPF_ALPHA);
 
-    // 初始化机体速度观测器
-    // 使用kf同时估计速度和加速度
-    Kalman_Filter_Init(&OBSERVER.body.v_kf, 2, 0, 2);
-    float F[4] = {1, 0.005, 0, 1};
-    float Q[4] = {VEL_PROCESS_NOISE, 0, 0, ACC_PROCESS_NOISE};
-    float R[4] = {VEL_MEASURE_NOISE, 0, 0, ACC_MEASURE_NOISE};
-    float P[4] = {100000, 0, 0, 100000};
-    float H[4] = {1, 0, 0, 1};
-    memcpy(OBSERVER.body.v_kf.F_data, F, sizeof(F));
-    memcpy(OBSERVER.body.v_kf.P_data, P, sizeof(P));
-    memcpy(OBSERVER.body.v_kf.Q_data, Q, sizeof(Q));
-    memcpy(OBSERVER.body.v_kf.R_data, R, sizeof(R));
-    memcpy(OBSERVER.body.v_kf.H_data, H, sizeof(H));
+    /*
+     * KF 状态 x = [vx, bax, wz, bgz]。预测模型为
+     * vx(k+1) = vx(k) + dt * (ax - bax)，其余三个状态均按随机游走处理。
+     * 观测量 [wheel_vx, wheel_wz, gyro_wz] = [vx, wz, wz + bgz]。
+     * 因此陀螺仪零偏由滤波器在线估计，而不只依赖固定的离线偏置。
+     */
+
+    Kalman_Filter_Init(&OBSERVER.body.motion_kf, 4, 1, 3);
+    {
+        const float motion_F[16] = {
+            1.0f, -CHASSIS_CONTROL_TIME_S, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+        };
+        const float motion_B[4] = {CHASSIS_CONTROL_TIME_S, 0.0f, 0.0f, 0.0f};
+        const float motion_H[12] = {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 1.0f,
+        };
+        const float motion_P[16] = {
+            0.25f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.04f, 0.0f, 0.0f,
+            0.0f, 0.0f, 0.25f, 0.0f,
+            0.0f, 0.0f, 0.0f, 0.01f,
+        };
+        memcpy(OBSERVER.body.motion_kf.F_data, motion_F, sizeof(motion_F));
+        memcpy(OBSERVER.body.motion_kf.B_data, motion_B, sizeof(motion_B));
+        memcpy(OBSERVER.body.motion_kf.H_data, motion_H, sizeof(motion_H));
+        memcpy(OBSERVER.body.motion_kf.P_data, motion_P, sizeof(motion_P));
+    }
 }
 
 /******************************************************************/
@@ -398,9 +434,17 @@ static void ResetXStateOnModeSwitch(void)
         CHASSIS.ref.leg_state[i].x_dot = 0.0f;
     }
 
-    // 把KF内部估计也清掉，避免切模式后立刻又带回旧状态
-    OBSERVER.body.v_kf.xhat_data[0] = 0.0f;
-    OBSERVER.body.v_kf.xhat_data[1] = 0.0f;
+    /*
+     * 模式切换会使之前的运动历史失效。同步重置状态和协方差，避免旧的速度/零偏
+     * 估计影响新模式；保留有限的对角协方差，以便滤波器随后正常重新收敛。
+     */
+    memset(OBSERVER.body.motion_kf.xhat_data, 0, sizeof(float) * 4U);
+    memset(OBSERVER.body.motion_kf.P_data, 0, sizeof(float) * 16U);
+    OBSERVER.body.motion_kf.P_data[0] = 0.25f;
+    OBSERVER.body.motion_kf.P_data[5] = 0.04f;
+    OBSERVER.body.motion_kf.P_data[10] = 0.25f;
+    OBSERVER.body.motion_kf.P_data[15] = 0.01f;
+    ResetWheelSlipDetection(0.0f);
 
     // 和x相关的PID也顺手清一下，避免积分残留
     PID_clear(&CHASSIS.pid.tail_x);
@@ -718,6 +762,22 @@ static void UpdateLegStatus(void)
         }
     }
 
+#if TAKE_OFF_DETECT
+    /*
+     * Fn 在接触边界附近存在噪声。要求对应条件持续 TOUCH_TOGGLE_THRESHOLD
+     * 后才改变接触标志，防止单周期力尖峰改变轮速测量 R。
+     */
+    for (i = 0; i < 2; i++) {
+        if (CHASSIS.fdb.leg[i].is_take_off &&
+            CHASSIS.fdb.leg[i].touch_time >= TOUCH_TOGGLE_THRESHOLD) {
+            CHASSIS.fdb.leg[i].is_take_off = false;
+        } else if (!CHASSIS.fdb.leg[i].is_take_off &&
+                   CHASSIS.fdb.leg[i].take_off_time >= TOUCH_TOGGLE_THRESHOLD) {
+            CHASSIS.fdb.leg[i].is_take_off = true;
+        }
+    }
+#endif
+
     CHASSIS.fdb.tail.ddBeta = (CHASSIS.fdb.tail.dBeta - last_dBeta) / (CHASSIS.duration * MS_TO_S);
     last_dBeta = CHASSIS.fdb.tail.dBeta;
     // CHASSIS.fdb.tail.TT
@@ -770,20 +830,231 @@ static void UpdateStepStatus(void)  //感觉只是跳
  * @brief  机体运动状态观测器，主要是得到速度和位移
  * @param  none
  */
+static void ResetWheelSlipDetection(float seed_velocity)
+{
+    /*
+     * 该复位在启动和模式切换时调用。为加速度积分速度写入初值，而非沿用任意旧值；
+     * 两轮均从 NORMAL 开始，真实残差出现前不会无故降低任一轮的权重。
+     */
+    memset(&CHASSIS_WHEEL_SLIP_STATUS, 0, sizeof(CHASSIS_WHEEL_SLIP_STATUS));
+    CHASSIS_WHEEL_SLIP_STATUS.state[0] = WHEEL_SPEED_NORMAL;
+    CHASSIS_WHEEL_SLIP_STATUS.state[1] = WHEEL_SPEED_NORMAL;
+    CHASSIS_WHEEL_SLIP_STATUS.imu_velocity = seed_velocity;
+    WHEEL_SLIP_RUNTIME.inited = true;
+    WHEEL_SLIP_RUNTIME.last_ref_speed = CHASSIS.ref.speed_vector.vx;
+}
+
+static void UpdateWheelSlipDetection(float dt_s, float wheel_vx, float accel_bias)
+{
+    /* 限制经过时间，避免 RTOS 调度延迟导致去抖状态被跨越。 */
+    const uint32_t dt_ms = (uint32_t)fp32_constrain(dt_s / MS_TO_S, 1.0f, 10.0f);
+    const float ref_speed = CHASSIS.ref.speed_vector.vx;
+    /* 使用期望加速度区分驱动行驶和受控制动。 */
+    const float ref_accel =
+        (ref_speed - WHEEL_SLIP_RUNTIME.last_ref_speed) / fmaxf(dt_s, 0.001f);
+    /*
+     * 打滑比较仅在近似直线的驱动行驶中有意义。转向会产生预期的左右轮速差；
+     * 即使轮胎接地良好，制动也可能产生轮速与 IMU 的残差。
+     */
+    const bool detection_enabled = fabsf(ref_speed) >= WHEEL_SLIP_VX_MIN &&
+        fabsf(CHASSIS.ref.speed_vector.wz) <= WHEEL_SLIP_WZ_MAX &&
+        ref_speed * ref_accel >= -WHEEL_SLIP_BRAKE_ACCEL_MAX;
+
+    if (!WHEEL_SLIP_RUNTIME.inited) {
+        ResetWheelSlipDetection(wheel_vx);
+        return;
+    }
+
+    /*
+     * 这里只构造短时独立参考，并非导航速度估计。积分扣除零偏后的加速度，
+     * 可避免打滑编码器立即以自身轮速定义一致性检验基准。
+     */
+    CHASSIS_WHEEL_SLIP_STATUS.imu_velocity = fp32_constrain(
+        CHASSIS_WHEEL_SLIP_STATUS.imu_velocity +
+            (CHASSIS.fdb.body.x_acc - accel_bias) * dt_s,
+        -MAX_SPEED, MAX_SPEED);
+    CHASSIS_WHEEL_SLIP_STATUS.slip_mask = 0U;
+
+    for (uint8_t i = 0U; i < 2U; i++) {
+        const float wheel_speed = WHEEL_RADIUS * CHASSIS.fdb.leg[i].wheel.Velocity;
+        const float wheel_effort = fmaxf(
+            fabsf(CHASSIS.cmd.leg[i].wheel.T), fabsf(CHASSIS.wheel_motor[i].fdb.tor));
+        /* 较大的驱动作用力与该速度残差共同构成单轮打滑证据。 */
+        const float slip_speed = fabsf(wheel_speed - CHASSIS_WHEEL_SLIP_STATUS.imu_velocity);
+        const bool candidate = detection_enabled && !CHASSIS.fdb.leg[i].is_take_off &&
+            wheel_effort >= WHEEL_SLIP_DRIVE_TORQUE_MIN_NM &&
+            slip_speed >= WHEEL_SLIP_ENTER_SPEED_MPS;
+        const bool recovered = slip_speed <= WHEEL_SLIP_EXIT_SPEED_MPS || !detection_enabled ||
+            wheel_effort < WHEEL_SLIP_DRIVE_TORQUE_MIN_NM;
+        WheelSpeedTrustState_e * const state = &CHASSIS_WHEEL_SLIP_STATUS.state[i];
+
+        CHASSIS_WHEEL_SLIP_STATUS.slip_speed[i] = slip_speed;
+        /* 腾空轮速不属于轮胎打滑，其测量 R 由接触状态逻辑单独处理。 */
+        if (CHASSIS.fdb.leg[i].is_take_off) {
+            *state = WHEEL_SPEED_NORMAL;
+            CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+            continue;
+        }
+
+        CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] += dt_ms;
+        /*
+         * NORMAL -> SUSPECT -> SLIPPING 需要残差持续存在。进入 RECOVERY 后
+         * 继续保持降权一段时间。两个计时阶段及不相等的进入/退出阈值形成迟滞，
+         * 可抑制编码器噪声和间歇性接触造成的状态抖动。
+         */
+        switch (*state) {
+            case WHEEL_SPEED_NORMAL:
+                if (candidate) {
+                    *state = WHEEL_SPEED_SUSPECT;
+                    CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                }
+                break;
+            case WHEEL_SPEED_SUSPECT:
+                if (!candidate) {
+                    *state = WHEEL_SPEED_NORMAL;
+                    CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                } else if (CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] >= WHEEL_SLIP_CONFIRM_MS) {
+                    *state = WHEEL_SPEED_SLIPPING;
+                    CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                }
+                break;
+            case WHEEL_SPEED_SLIPPING:
+                if (recovered) {
+                    *state = WHEEL_SPEED_RECOVERY;
+                    CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                }
+                break;
+            case WHEEL_SPEED_RECOVERY:
+                if (candidate) {
+                    *state = WHEEL_SPEED_SUSPECT;
+                    CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                } else if (CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] >= WHEEL_SLIP_RECOVERY_MS) {
+                    *state = WHEEL_SPEED_NORMAL;
+                    CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                }
+                break;
+            default:
+                *state = WHEEL_SPEED_NORMAL;
+                CHASSIS_WHEEL_SLIP_STATUS.state_time_ms[i] = 0U;
+                break;
+        }
+
+        /* RECOVERY 仍保留掩码，避免轮速 R 过早恢复为标称值。 */
+        if (*state == WHEEL_SPEED_SLIPPING || *state == WHEEL_SPEED_RECOVERY) {
+            CHASSIS_WHEEL_SLIP_STATUS.slip_mask |= (uint8_t)(1U << i);
+        }
+    }
+
+    /*
+     * 仅使用可信且接地的轮速缓慢修正积分漂移。该弱校正保留独立的残差来源，
+     * 供打滑检测使用。
+     */
+    if (!CHASSIS.fdb.leg[0].is_take_off && !CHASSIS.fdb.leg[1].is_take_off &&
+        CHASSIS_WHEEL_SLIP_STATUS.state[0] == WHEEL_SPEED_NORMAL &&
+        CHASSIS_WHEEL_SLIP_STATUS.state[1] == WHEEL_SPEED_NORMAL &&
+        fabsf(CHASSIS.ref.speed_vector.wz) <= WHEEL_SLIP_WZ_MAX) {
+        CHASSIS_WHEEL_SLIP_STATUS.imu_velocity += WHEEL_SLIP_IMU_CORRECTION_ALPHA *
+            (wheel_vx - CHASSIS_WHEEL_SLIP_STATUS.imu_velocity);
+    }
+    WHEEL_SLIP_RUNTIME.last_ref_speed = ref_speed;
+}
+
 static void BodyMotionObserve(void)
 {
-    // clang-format off 
-    float speed = (WHEEL_RADIUS * CHASSIS.fdb.leg[0].wheel.Velocity + cosf(CHASSIS.fdb.leg[0].rod.Theta) * CHASSIS.fdb.leg[0].rod.L0 * CHASSIS.fdb.leg[0].rod.dTheta + WHEEL_RADIUS * CHASSIS.fdb.leg[1].wheel.Velocity + cosf(CHASSIS.fdb.leg[1].rod.Theta) * CHASSIS.fdb.leg[1].rod.L0 * CHASSIS.fdb.leg[1].rod.dTheta) / 2;
-    // clang-format on
+    /* 在代入预测模型前，将 dt 限制在预期的底盘任务周期范围内。 */
+    const float dt = fp32_constrain(CHASSIS.duration * MS_TO_S, 0.001f, 0.010f);
+    const float left_speed = WHEEL_RADIUS * CHASSIS.fdb.leg[0].wheel.Velocity;
+    const float right_speed = WHEEL_RADIUS * CHASSIS.fdb.leg[1].wheel.Velocity;
+    const float wheel_vx = 0.5f * (left_speed + right_speed);
+    const float wheel_wz = (right_speed - left_speed) / WHEEL_BASE;
+    const float gyro_wz = GetImuVelocity(AX_YAW);
+    KalmanFilter_t * const kf = &OBSERVER.body.motion_kf;
 
-    // 使用kf同时估计加速度和速度,滤波更新
-    OBSERVER.body.v_kf.MeasuredVector[0] = speed;                   // 输入轮速
-    OBSERVER.body.v_kf.MeasuredVector[1] = CHASSIS.fdb.body.x_acc;  // 输入加速度
-    OBSERVER.body.v_kf.F_data[1] = CHASSIS.duration * MS_TO_S;      // 更新采样时间
+    /* 将当前在线加速度零偏估计传入打滑检测的 IMU 参考速度。 */
+    UpdateWheelSlipDetection(dt, wheel_vx, kf->xhat_data[1]);
 
-    Kalman_Filter_Update(&OBSERVER.body.v_kf);
-    CHASSIS.fdb.body.x_dot_obv = OBSERVER.body.v_kf.xhat_data[0];
-    CHASSIS.fdb.body.x_acc_obv = OBSERVER.body.v_kf.xhat_data[1];
+    const bool left_airborne = CHASSIS.fdb.leg[0].is_take_off;
+    const bool right_airborne = CHASSIS.fdb.leg[1].is_take_off;
+    const bool airborne = left_airborne && right_airborne;
+    const bool slip_active = CHASSIS_WHEEL_SLIP_STATUS.slip_mask != 0U;
+    /* 使用扣除在线陀螺仪零偏后的角速度，与轮速偏航角速度进行比较。 */
+    const bool yaw_disagreement =
+        fabsf(wheel_wz - (gyro_wz - kf->xhat_data[3])) > MOTION_WHEEL_GYRO_DISAGREE;
+    const bool wheel_degraded = left_airborne || right_airborne || slip_active || yaw_disagreement;
+    /*
+     * 静止状态要求指令与所有运动传感器一致。此时向滤波器提供高置信度零速度观测，
+     * 可抑制停放期间缓慢积累的速度和陀螺仪零偏漂移。
+     */
+    const bool stationary = !wheel_degraded &&
+        fabsf(wheel_vx) < MOTION_STILL_VX && fabsf(wheel_wz) < MOTION_STILL_WZ &&
+        fabsf(gyro_wz) < MOTION_STILL_WZ && fabsf(CHASSIS.fdb.body.x_acc) < MOTION_STILL_ACCEL &&
+        fabsf(CHASSIS.ref.speed_vector.vx) < MOTION_STILL_VX &&
+        fabsf(CHASSIS.ref.speed_vector.wz) < MOTION_STILL_WZ;
+    const float wheel_noise_scale = airborne ? MOTION_R_AIRBORNE_SCALE :
+        (wheel_degraded ? MOTION_R_DEGRADED_SCALE : 1.0f);
+    uint8_t health = CHASSIS_OBSERVER_HEALTH_OK;
+    if (airborne) health |= CHASSIS_OBSERVER_HEALTH_AIRBORNE;
+    else if (wheel_degraded) health |= CHASSIS_OBSERVER_HEALTH_WHEEL_DEGRADED;
+    if (stationary) health |= CHASSIS_OBSERVER_HEALTH_STATIONARY;
+
+    /* 将当前 dt 写入 vx(k+1) = vx + dt * (ax - accel_bias) 的状态转移项。 */
+    kf->F_data[1] = -dt;
+    kf->B_data[0] = dt;
+    /* Q 为对角矩阵：各状态可在两次观测间独立缓慢漂移。 */
+    memset(kf->Q_data, 0, sizeof(float) * 16U);
+    kf->Q_data[0] = MOTION_Q_VX * dt;
+    kf->Q_data[5] = MOTION_Q_ACCEL_BIAS * dt;
+    kf->Q_data[10] = MOTION_Q_WZ * dt;
+    kf->Q_data[15] = MOTION_Q_GYRO_BIAS * dt;
+    /*
+     * 通过修改 R 而非删除轮速观测实现降权。打滑或接触不确定时，较大的 R 会平滑
+     * 降低轮速增益；陀螺仪通道不依赖轮胎接地，因此保持标称 R。
+     */
+    memset(kf->R_data, 0, sizeof(float) * 9U);
+    kf->R_data[0] = stationary ? 0.0001f : MOTION_R_WHEEL_VX * wheel_noise_scale;
+    kf->R_data[4] = stationary ? 0.0004f : MOTION_R_WHEEL_WZ * wheel_noise_scale;
+    kf->R_data[8] = MOTION_R_GYRO_WZ;
+    kf->MeasuredVector[0] = stationary ? 0.0f : wheel_vx;
+    kf->MeasuredVector[1] = stationary ? 0.0f : wheel_wz;
+    kf->MeasuredVector[2] = gyro_wz;
+    kf->ControlVector[0] = CHASSIS.fdb.body.x_acc;
+    Kalman_Filter_Update(kf);
+
+    /*
+     * 奇异或无效更新不能将 NaN 传入控制器。以直接传感器值重新播种状态，清除两类
+     * 零偏估计，并恢复保守的对角 P，使后续周期能够再次收敛。
+     */
+    if (kf->MatStatus != ARM_MATH_SUCCESS ||
+        !isfinite(kf->xhat_data[0]) || !isfinite(kf->xhat_data[1]) ||
+        !isfinite(kf->xhat_data[2]) || !isfinite(kf->xhat_data[3])) {
+        health |= CHASSIS_OBSERVER_HEALTH_NUMERIC_FALLBACK;
+        kf->xhat_data[0] = wheel_vx;
+        kf->xhat_data[1] = 0.0f;
+        kf->xhat_data[2] = gyro_wz;
+        kf->xhat_data[3] = 0.0f;
+        memset(kf->P_data, 0, sizeof(float) * 16U);
+        kf->P_data[0] = 0.25f;
+        kf->P_data[5] = 0.04f;
+        kf->P_data[10] = 0.25f;
+        kf->P_data[15] = 0.01f;
+    }
+
+    /* 保留原始轮速用于对比；提供给控制器的速度使用融合状态。 */
+    CHASSIS.fdb.body.x_dot = wheel_vx;
+    CHASSIS.fdb.body.x_dot_obv = kf->xhat_data[0];
+    CHASSIS.fdb.body.x_acc_obv = CHASSIS.fdb.body.x_acc - kf->xhat_data[1];
+    CHASSIS.fdb.body.yaw_dot = kf->xhat_data[2];
+    CHASSIS_MOTION_OBSERVER.vx = kf->xhat_data[0];
+    CHASSIS_MOTION_OBSERVER.accel_bias = kf->xhat_data[1];
+    CHASSIS_MOTION_OBSERVER.wz = kf->xhat_data[2];
+    CHASSIS_MOTION_OBSERVER.gyro_bias = kf->xhat_data[3];
+    CHASSIS_MOTION_OBSERVER.covariance_diag[0] = kf->P_data[0];
+    CHASSIS_MOTION_OBSERVER.covariance_diag[1] = kf->P_data[5];
+    CHASSIS_MOTION_OBSERVER.covariance_diag[2] = kf->P_data[10];
+    CHASSIS_MOTION_OBSERVER.covariance_diag[3] = kf->P_data[15];
+    CHASSIS_MOTION_OBSERVER.wheel_vx = wheel_vx;
+    CHASSIS_MOTION_OBSERVER.wheel_wz = wheel_wz;
+    CHASSIS_MOTION_OBSERVER.health = health;
 
     // 底盘速度向量用于对外输出和调试，统一在观测器里更新
     CHASSIS.fdb.speed_vector.vx = CHASSIS.fdb.body.x_dot_obv;
