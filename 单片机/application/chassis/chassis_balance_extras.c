@@ -1,8 +1,5 @@
 #include "chassis_balance_extras.h"
 
-// #include "index_bipedal.h"
-// #include "index_notail.h"
-// #include "index_tripod.h"
 #include "arm_math.h"
 #include "math.h"
 
