@@ -496,7 +496,9 @@ void ChassisSetMode(void)
 
     ChassisMode_e new_mode;
 
-    if (switch_is_mid(mode_sw) && switch_is_up(func_sw)) {
+    if (switch_is_up(mode_sw) && switch_is_up(func_sw)) {
+        new_mode = CHASSIS_SYSTEM_IDENTIFICATION;
+    } else if (switch_is_mid(mode_sw) && switch_is_up(func_sw)) {
         new_mode = CHASSIS_NOTAIL;
     } else if (switch_is_mid(mode_sw) && switch_is_down(func_sw)) {
         new_mode = CHASSIS_BIPEDAL;
@@ -1244,7 +1246,7 @@ void ChassisReference(void)
 
     // rc.ch[0]=CH1右平, ch[1]=CH2右竖, ch[2]=CH3左竖, ch[3]=CH4左平
 //CHASSIS.mode = CHASSIS_SAFE
-    if (CHASSIS.mode != CHASSIS_SAFE) {
+    if (CHASSIS.mode != CHASSIS_SAFE && CHASSIS.mode != CHASSIS_SYSTEM_IDENTIFICATION) {
         rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_X_CHANNEL], rc_x, CHASSIS_RC_DEADLINE);    // ch[2]=CH3左竖→前后
         rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_WZ_CHANNEL], rc_wz, CHASSIS_RC_DEADLINE);  // ch[3]=CH4左平→旋转
         if (CHASSIS.mode == CHASSIS_JOINED) {
@@ -1295,6 +1297,18 @@ void ChassisReference(void)
             CHASSIS.ref.body.x += CHASSIS.ref.speed_vector.vx * CHASSIS_CONTROL_TIME_S;
         } break;
 
+        case CHASSIS_SYSTEM_IDENTIFICATION:
+        {
+            // 保持进入辨识模式时复位得到的固定工作点，不接受遥控器运动指令。
+            CHASSIS.ref.speed_vector.vx = SYS_ID_REF_BODY_X_DOT;
+            CHASSIS.ref.speed_vector.vy = 0.0f;
+            CHASSIS.ref.speed_vector.wz = SYS_ID_REF_BODY_YAW_DOT;
+            CHASSIS.ref.body.x = SYS_ID_REF_BODY_X;
+            CHASSIS.ref.body.yaw = SYS_ID_REF_BODY_YAW;
+            CHASSIS.ref.body.yaw_dot = SYS_ID_REF_BODY_YAW_DOT;
+            CHASSIS.ref.body.pitch_dot = SYS_ID_REF_BODY_PITCH_DOT;
+        } break;
+
         case CHASSIS_STAND_UP:
         case CHASSIS_SAFE:
         case CHASSIS_OFF:
@@ -1306,9 +1320,14 @@ void ChassisReference(void)
         } break;
     }
 
-    CHASSIS.ref.body.roll = fp32_constrain(-rc_roll * RC_TO_ONE * MAX_ROLL, MIN_ROLL, MAX_ROLL);
-    CHASSIS.ref.body.pitch =
-        fp32_constrain(-rc_pitch * RC_TO_ONE * MAX_PITCH, MIN_PITCH, MAX_PITCH);
+    if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
+        CHASSIS.ref.body.roll = SYS_ID_REF_BODY_ROLL;
+        CHASSIS.ref.body.pitch = SYS_ID_REF_BODY_PITCH;
+    } else {
+        CHASSIS.ref.body.roll = fp32_constrain(-rc_roll * RC_TO_ONE * MAX_ROLL, MIN_ROLL, MAX_ROLL);
+        CHASSIS.ref.body.pitch =
+            fp32_constrain(-rc_pitch * RC_TO_ONE * MAX_PITCH, MIN_PITCH, MAX_PITCH);
+    }
 
     // 腿部控制
     static float angle = 0;
@@ -1381,6 +1400,11 @@ void ChassisReference(void)
             // }
             tail_angle = rc_tail * RC_TO_ONE;
         } break;
+        case CHASSIS_SYSTEM_IDENTIFICATION: {
+            length = SYS_ID_LEG_LENGTH;
+            angle = SYS_ID_REF_LEFT_LEG_THETA;
+            tail_angle = SYS_ID_REF_TAIL_BETA;
+        } break;
         default: {
             angle = 0;
             length = 0.16f;
@@ -1396,21 +1420,25 @@ void ChassisReference(void)
     CHASSIS.ref.rod_dL0[0] = 0.0f;
     CHASSIS.ref.rod_dL0[1] = 0.0f;
     CHASSIS.ref.rod_Angle[0] = angle;
-    CHASSIS.ref.rod_Angle[1] = angle;
+    CHASSIS.ref.rod_Angle[1] = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                                   SYS_ID_REF_RIGHT_LEG_THETA : angle;
 
     // 计算期望状态
     // clang-format off
     for (uint8_t i = 0; i < 2; i++) {
         CHASSIS.ref.leg_state[i].theta     =  CHASSIS.ref.rod_Angle[i];
-        CHASSIS.ref.leg_state[i].theta_dot =  0;
+        CHASSIS.ref.leg_state[i].theta_dot =
+            (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                ((i == 0) ? SYS_ID_REF_LEFT_LEG_THETA_DOT : SYS_ID_REF_RIGHT_LEG_THETA_DOT) : 0.0f;
         CHASSIS.ref.leg_state[i].x        +=  CHASSIS.ref.speed_vector.vx * CHASSIS_CONTROL_TIME_S;
         CHASSIS.ref.leg_state[i].x_dot     =  CHASSIS.ref.speed_vector.vx;
         CHASSIS.ref.leg_state[i].phi       =  CHASSIS.ref.body.pitch;
-        CHASSIS.ref.leg_state[i].phi_dot   =  0;
+        CHASSIS.ref.leg_state[i].phi_dot   = 0.0f;
     }
     // 一阶低通后的尾巴摆角期望
     CHASSIS.ref.tail_state.beta += TAIL_BETA_ALPHA * (tail_angle - CHASSIS.ref.tail_state.beta);
-    CHASSIS.ref.tail_state.beta_dot    =  0;
+    CHASSIS.ref.tail_state.beta_dot =
+        (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ? SYS_ID_REF_TAIL_BETA_DOT : 0.0f;
     // clang-format on
 
     // 夹爪目标量：CH7 开关 (rc.ch[6]) 上档张开，中/下档闭合
@@ -1482,6 +1510,10 @@ void ChassisConsole(void)
             ConsoleNoTail();
         } break;
         case CHASSIS_BIPEDAL: {
+            ConsoleBipedal();
+        } break;
+        case CHASSIS_SYSTEM_IDENTIFICATION: {
+            // 使用尾巴离地LQR结构，但参考状态和腿长在ChassisReference中固定。
             ConsoleBipedal();
         } break;
         case CHASSIS_TRIPOD: {
@@ -2125,10 +2157,14 @@ static void LocomotionController_Pro_Bipedal(void)
     //     is_take_off = true;
     // }
 
-    // LQR 计算
-    GetK_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, k, is_take_off);
-    GetTheta_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, theta_eq);
-    GetT0_Pro_Bipedal(CHASSIS.fdb.leg[0].rod.L0, CHASSIS.fdb.leg[1].rod.L0, T0_eq);
+    // LQR 计算。系统辨识模式固定工作点对应的增益，其余模式使用实时腿长增益。
+    const float l_l = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                          SYS_ID_LEG_LENGTH : CHASSIS.fdb.leg[0].rod.L0;
+    const float l_r = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                          SYS_ID_LEG_LENGTH : CHASSIS.fdb.leg[1].rod.L0;
+    GetK_Pro_Bipedal(l_l, l_r, k, is_take_off);
+    GetTheta_Pro_Bipedal(l_l, l_r, theta_eq);
+    GetT0_Pro_Bipedal(l_l, l_r, T0_eq);
 
     CHASSIS.ref.rod_Angle[0] += theta_eq[0];
     CHASSIS.ref.rod_Angle[1] += theta_eq[1];
@@ -2138,11 +2174,15 @@ static void LocomotionController_Pro_Bipedal(void)
     x[2] = X2_OFFSET + WrapToPi(CHASSIS.fdb.body.yaw - CHASSIS.ref.body.yaw);
     x[3] = X3_OFFSET + (CHASSIS.fdb.body.yaw_dot - CHASSIS.ref.speed_vector.wz);
     x[4] = X4_OFFSET + (CHASSIS.fdb.leg_state[0].theta - CHASSIS.ref.rod_Angle[0]);
-    x[5] = X5_OFFSET + (CHASSIS.fdb.leg_state[0].theta_dot - 0.0f);
+    x[5] = X5_OFFSET +
+           (CHASSIS.fdb.leg_state[0].theta_dot - CHASSIS.ref.leg_state[0].theta_dot);
     x[6] = X6_OFFSET + (CHASSIS.fdb.leg_state[1].theta - CHASSIS.ref.rod_Angle[1]);
-    x[7] = X7_OFFSET + (CHASSIS.fdb.leg_state[1].theta_dot - 0.0f);
+    x[7] = X7_OFFSET +
+           (CHASSIS.fdb.leg_state[1].theta_dot - CHASSIS.ref.leg_state[1].theta_dot);
     x[8] = X8_OFFSET + (CHASSIS.fdb.body.phi - CHASSIS.ref.body.pitch);
-    x[9] = X9_OFFSET + (CHASSIS.fdb.body.phi_dot - 0.0f);
+    x[9] = X9_OFFSET +
+           (CHASSIS.fdb.body.phi_dot -
+            ((CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ? CHASSIS.ref.body.pitch_dot : 0.0f));
     x[10] = X10_OFFSET + (CHASSIS.fdb.tail_state.beta - CHASSIS.ref.tail_state.beta);
     x[11] = X11_OFFSET + (CHASSIS.fdb.tail_state.beta_dot - CHASSIS.ref.tail_state.beta_dot);
     CalcLQR_Pro_Tail(k, x, Tp_T_Tt);
@@ -2175,8 +2215,10 @@ static void LocomotionController_Pro_Bipedal(void)
     float delta_L0 = 0.0f;  // roll_dot阻尼已禁用(运动噪声过大)
     // CHASSIS.ref.rod_L0[0] += (-tail_z_comp);
     // CHASSIS.ref.rod_L0[1] += (-tail_z_comp);
-    // 维持腿长在范围内
-    CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
+    // 维持腿长在范围内；辨识模式下参考腿长必须保持固定。
+    if (CHASSIS.mode != CHASSIS_SYSTEM_IDENTIFICATION) {
+        CoordinateLegLength(&CHASSIS.ref.rod_L0[0], &CHASSIS.ref.rod_L0[1], L_diff, delta_L0);
+    }
 }
 
 /**
@@ -2720,6 +2762,7 @@ static void SendJointMotorCmd(void)
     switch (CHASSIS.mode) {
         case CHASSIS_NOTAIL:
         case CHASSIS_BIPEDAL:
+        case CHASSIS_SYSTEM_IDENTIFICATION:
         case CHASSIS_TRIPOD: {
             LkMultipleTorqueControl_MG6012(
                 JOINT_CAN, CHASSIS.joint_motor[0].set.tor, CHASSIS.joint_motor[1].set.tor,
@@ -2750,6 +2793,7 @@ static void SendWheelMotorCmd(void)
     switch (CHASSIS.mode) {
         case CHASSIS_NOTAIL:
         case CHASSIS_BIPEDAL:
+        case CHASSIS_SYSTEM_IDENTIFICATION:
         case CHASSIS_TRIPOD: {
             if (CHASSIS.tail_motor.set.tor > 7.0f) CHASSIS.tail_motor.set.tor = 7.0f;
             if (CHASSIS.tail_motor.set.tor < -7.0f) CHASSIS.tail_motor.set.tor = -7.0f;

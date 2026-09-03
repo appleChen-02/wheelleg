@@ -51,7 +51,8 @@ typedef enum {
     CHASSIS_NOTAIL,     // 不装尾巴的测试模式（读尾巴输入但是最终输出扭矩先为0）
     CHASSIS_BIPEDAL,    // 单体 装尾巴 尾巴离地抓取
     CHASSIS_TRIPOD,     // 单体 装尾巴 尾巴着地
-    CHASSIS_JOINED      // 多体平衡
+    CHASSIS_JOINED,     // 多体平衡
+    CHASSIS_SYSTEM_IDENTIFICATION  // 系统辨识：固定平衡点参考，保留LQR反馈
 } ChassisMode_e;
 
 typedef struct Leg
