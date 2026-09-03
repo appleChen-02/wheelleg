@@ -51,6 +51,8 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
     targetFile = fullfile(logDir, 'robot_target.csv');
     torqueFile = fullfile(logDir, 'torque.csv');
     motorDataFile = fullfile(logDir, 'motor_data.csv');
+    pidDebugFile = fullfile(logDir, 'pid_debug.csv');
+    rlStateFile = fullfile(logDir, 'rl_state.csv');
     motorErrorFile = fullfile(logDir, 'motor_error.csv');
     unknownFile = fullfile(logDir, 'unknown_frames.csv');
     matFile = fullfile(logDir, 'usb_log.mat');
@@ -83,6 +85,18 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
         log.motor_data = readtable(motorDataFile, 'VariableNamingRule', 'preserve');
     else
         log.motor_data = table();
+    end
+
+    if isfile(pidDebugFile)
+        log.pid_debug = readtable(pidDebugFile, 'VariableNamingRule', 'preserve');
+    else
+        log.pid_debug = table();
+    end
+
+    if isfile(rlStateFile)
+        log.rl_state = readtable(rlStateFile, 'VariableNamingRule', 'preserve');
+    else
+        log.rl_state = table();
     end
 
     if isfile(motorErrorFile)

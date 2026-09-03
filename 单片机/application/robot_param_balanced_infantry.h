@@ -7,6 +7,8 @@
 #define INCLUDED_ROBOT_PARAM_H
 #include "robot_typedef.h"
 
+#define RL_CONTROL_CHANNEL 5  // CH6: RL/classic control select (up: RL, down: classic)
+
 // clang-format off
 #define TAIL_VERSION 1        // 尾巴版本
 #define __SELF_BOARD_ID C_BOARD_BALANCE_CHASSIS // 本板ID

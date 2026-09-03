@@ -14,14 +14,17 @@
 #define RECEIVE_SOF ((uint8_t)0x5A)
 
 #define IMU_DATA_SEND_ID          ((uint8_t)0x02)
+#define PID_DEBUG_SEND_ID         ((uint8_t)0x05)
 #define ROBOT_MOTION_DATA_SEND_ID ((uint8_t)0x08)
 #define ROBOT_TARGET_DATA_SEND_ID ((uint8_t)0x0B)
 #define TORQUE_DATA_SEND_ID       ((uint8_t)0x0C)
 #define MOTOR_ERROR_SEND_ID       ((uint8_t)0x0D)
 #define MOTOR_DATA_SEND_ID        ((uint8_t)0x0E)
+#define RL_STATE_DATA_SEND_ID     ((uint8_t)0x0F)
 
 #define ROBOT_CMD_DATA_RECEIVE_ID  ((uint8_t)0x01)
 #define VIRTUAL_RC_DATA_RECEIVE_ID ((uint8_t)0x03)
+#define RL_LOW_CMD_DATA_RECEIVE_ID ((uint8_t)0x04)
 // clang-format on
 
 typedef struct
@@ -56,6 +59,19 @@ typedef struct
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataImu_s;
+
+typedef struct
+{
+    FrameHeader_t frame_header;
+    uint32_t time_stamp;
+    struct
+    {
+        float fdb;
+        float ref;
+        float pid_out;
+    } __packed__ data;
+    uint16_t crc;
+} __packed__ SendDataPidDebug_s;
 
 // 机器人运动数据包
 typedef struct
@@ -179,6 +195,30 @@ typedef struct
     uint16_t crc;
 } __packed__ SendDataMotor_s;
 
+typedef struct
+{
+    FrameHeader_t frame_header;
+    uint32_t time_stamp;
+    uint16_t sequence;
+    struct
+    {
+        float quat_wxyz[4];
+        float rpy[3];
+        float gyro_body[3];
+        float vx_long;
+        float height;
+        float heightdot;
+        float joint_pos[7];
+        float joint_vel[7];
+        float remote_vx;
+        float remote_wz;
+        uint8_t motor_offline_mask;
+        uint8_t control_mode;
+        uint16_t remote_height_mm;
+    } __packed__ data;
+    uint16_t crc;
+} __packed__ SendDataRlState_s;
+
 /*-------------------- Receive --------------------*/
 // 机器人控制指令数据包
 typedef struct RobotCmdData
@@ -200,9 +240,6 @@ typedef struct RobotCmdData
             float yaw;
             float leg_lenth;
         } __packed__ chassis;
-        uint8_t motor_torque_enable;  // 非 0 时使用 motor_torque 直接控制电机
-        uint8_t reserved[3];
-        float motor_torque[7];  // N*m [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
     } __packed__ data;
     uint16_t checksum;
 } __packed__ ReceiveDataRobotCmd_s;
@@ -215,4 +252,23 @@ typedef struct
     RC_ctrl_t data;
     uint16_t crc;
 } __packed__ ReceiveDataVirtualRc_s;
+
+typedef struct
+{
+    FrameHeader_t frame_header;
+    uint32_t time_stamp;
+    uint16_t sequence;
+    uint8_t enable;
+    uint8_t reserved;
+    struct
+    {
+        float q_des[7];
+        float dq_des[7];
+        float kp[7];
+        float kd[7];
+        float tau_ff[7];
+        float q_fdb_offset[7];
+    } __packed__ data;
+    uint16_t crc;
+} __packed__ ReceiveDataRlLowCmd_s;
 #endif  // USB_TYPEDEF_H

@@ -94,11 +94,26 @@ SOF = 0x5A
 # 下位机当前常用的上行数据包 ID。
 # 如果下位机协议以后增加新包，只需要在这里补一个分支并同步 MATLAB 侧即可。
 ID_IMU = 0x02
+ID_PID_DEBUG = 0x05
 ID_ROBOT_MOTION = 0x08
 ID_ROBOT_TARGET = 0x0B
 ID_TORQUE = 0x0C
 ID_MOTOR_ERROR = 0x0D
 ID_MOTOR_DATA = 0x0E
+ID_RL_STATE = 0x0F
+
+PID_DEBUG_STRUCT = struct.Struct("<I3f")
+PID_DEBUG_COLUMNS = ["tick_ms", "fdb", "ref", "pid_out"]
+
+RL_STATE_STRUCT = struct.Struct("<IH29fBBH")
+RL_JOINT_NAMES = ["L_hip", "L_parallel", "L_wheel", "R_hip", "R_parallel", "R_wheel", "front"]
+RL_STATE_COLUMNS = (
+    ["tick_ms", "sequence", "quat_w", "quat_x", "quat_y", "quat_z", "roll", "pitch", "yaw",
+     "gyro_x", "gyro_y", "gyro_z", "vx_long", "height", "heightdot"]
+    + [f"{name}_pos" for name in RL_JOINT_NAMES]
+    + [f"{name}_vel" for name in RL_JOINT_NAMES]
+    + ["remote_vx", "remote_wz", "motor_offline_mask", "control_mode", "remote_height_mm"]
+)
 
 # 电机数据 payload: <I14f> (tick_ms + 7 positions + 7 feedback torques)
 MOTOR_DATA_STRUCT = struct.Struct("<I14f")
@@ -241,6 +256,12 @@ class CsvSink:
         self.motor_data_file = open(
             os.path.join(outdir, "motor_data.csv"), "w", newline="", encoding="utf-8"
         )
+        self.pid_debug_file = open(
+            os.path.join(outdir, "pid_debug.csv"), "w", newline="", encoding="utf-8"
+        )
+        self.rl_state_file = open(
+            os.path.join(outdir, "rl_state.csv"), "w", newline="", encoding="utf-8"
+        )
         self.unknown_file = open(
             os.path.join(outdir, "unknown_frames.csv"), "w", newline="", encoding="utf-8"
         )
@@ -251,6 +272,8 @@ class CsvSink:
         self.torque_writer = csv.writer(self.torque_file)
         self.motor_error_writer = csv.writer(self.motor_error_file)
         self.motor_data_writer = csv.writer(self.motor_data_file)
+        self.pid_debug_writer = csv.writer(self.pid_debug_file)
+        self.rl_state_writer = csv.writer(self.rl_state_file)
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
@@ -261,6 +284,8 @@ class CsvSink:
         self.torque_writer.writerow(["host_time_s"] + TORQUE_COLUMNS)
         self.motor_error_writer.writerow(["host_time_s", "tick_ms", "offline_mask", "offline_motors"])
         self.motor_data_writer.writerow(["host_time_s"] + MOTOR_DATA_COLUMNS)
+        self.pid_debug_writer.writerow(["host_time_s"] + PID_DEBUG_COLUMNS)
+        self.rl_state_writer.writerow(["host_time_s"] + RL_STATE_COLUMNS)
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
@@ -269,6 +294,8 @@ class CsvSink:
         self.torque_rows: List[List[float]] = []
         self.motor_error_rows: List[List[object]] = []
         self.motor_data_rows: List[List[float]] = []
+        self.pid_debug_rows: List[List[float]] = []
+        self.rl_state_rows: List[List[float]] = []
 
     def write_imu(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
@@ -300,6 +327,16 @@ class CsvSink:
         self.motor_data_writer.writerow(line)
         self.motor_data_rows.append(line)
 
+    def write_pid_debug(self, host_t: float, row: List[float]) -> None:
+        line = [host_t] + row
+        self.pid_debug_writer.writerow(line)
+        self.pid_debug_rows.append(line)
+
+    def write_rl_state(self, host_t: float, row: List[float]) -> None:
+        line = [host_t] + row
+        self.rl_state_writer.writerow(line)
+        self.rl_state_rows.append(line)
+
     def write_unknown(self, host_t: float, pkt_id: int, payload_len: int, frame_hex: str) -> None:
         self.unknown_writer.writerow([host_t, f"0x{pkt_id:02X}", payload_len, frame_hex])
 
@@ -310,6 +347,8 @@ class CsvSink:
         self.torque_file.flush()
         self.motor_error_file.flush()
         self.motor_data_file.flush()
+        self.pid_debug_file.flush()
+        self.rl_state_file.flush()
         self.unknown_file.flush()
 
     def close(self) -> None:
@@ -320,6 +359,8 @@ class CsvSink:
         self.torque_file.close()
         self.motor_error_file.close()
         self.motor_data_file.close()
+        self.pid_debug_file.close()
+        self.rl_state_file.close()
         self.unknown_file.close()
 
 
@@ -399,6 +440,13 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "row": [tick_ms, yaw, pitch, roll, roll_smooth, yaw_vel, pitch_vel, roll_vel],
         }
 
+    if pkt_id == ID_PID_DEBUG and len(payload) == PID_DEBUG_STRUCT.size:
+        return {
+            "type": "pid_debug",
+            "host_time": host_t,
+            "row": list(PID_DEBUG_STRUCT.unpack(payload)),
+        }
+
     if pkt_id == ID_ROBOT_MOTION and len(payload) == ROBOT_SNAPSHOT_STRUCT.size:
         row = list(ROBOT_SNAPSHOT_STRUCT.unpack(payload))
         return {
@@ -439,6 +487,13 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "type": "motor_data",
             "host_time": host_t,
             "row": row,
+        }
+
+    if pkt_id == ID_RL_STATE and len(payload) == RL_STATE_STRUCT.size:
+        return {
+            "type": "rl_state",
+            "host_time": host_t,
+            "row": list(RL_STATE_STRUCT.unpack(payload)),
         }
 
     return {
@@ -594,6 +649,12 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "motor_data": np.array(sink.motor_data_rows, dtype=float)
         if sink.motor_data_rows
         else np.empty((0, 16), dtype=float),
+        "pid_debug": np.array(sink.pid_debug_rows, dtype=float)
+        if sink.pid_debug_rows
+        else np.empty((0, 5), dtype=float),
+        "rl_state": np.array(sink.rl_state_rows, dtype=float)
+        if sink.rl_state_rows
+        else np.empty((0, 35), dtype=float),
     }
 
     mat_path = os.path.join(outdir, "usb_log.mat")
@@ -721,6 +782,25 @@ def run(args: argparse.Namespace) -> int:
                                     f"T_J0={row[8]:.3f} T_W0={row[12]:.3f} T_Tail={row[14]:.3f}"
                                 )
                                 realtime_emit_append(message, args)
+                        elif kind == "pid_debug":
+                            row = list(decoded["row"])
+                            sink.write_pid_debug(host_t, row)
+                            if getattr(args, "realtime", False):
+                                realtime_emit_append(
+                                    f"[RL-PD] tick={int(row[0])} fdb={row[1]:.3f} "
+                                    f"ref={row[2]:.3f} tau={row[3]:.3f}",
+                                    args,
+                                )
+                        elif kind == "rl_state":
+                            row = list(decoded["row"])
+                            sink.write_rl_state(host_t, row)
+                            if getattr(args, "realtime", False):
+                                realtime_emit_append(
+                                    f"[RL-STATE] tick={int(row[0])} seq={int(row[1])} "
+                                    f"roll={row[6]:.3f} pitch={row[7]:.3f} vx={row[12]:.3f} "
+                                    f"mode={int(row[32])}",
+                                    args,
+                                )
                         else:
                             parser.stats.unknown_id += 1
                             sink.write_unknown(

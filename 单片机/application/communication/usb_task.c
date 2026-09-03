@@ -17,6 +17,7 @@
 
 #include "usb_task.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -50,11 +51,13 @@ uint32_t usb_high_water;
 #define SEND_DURATION_RobotTarget 10  // ms
 #define SEND_DURATION_Torque      10  // ms
 #define SEND_DURATION_MotorData   10  // ms
+#define SEND_DURATION_PidDebug    10  // ms
+#define SEND_DURATION_RlState     5   // ms
 
 // clang-format on
 
 #define USB_RX_DATA_SIZE 256  // byte
-#define USB_RECEIVE_LEN 150   // byte
+#define USB_RECEIVE_LEN 192   // byte; RL low command frame is 182 bytes
 #define HEADER_SIZE 4         // byte
 
 #define CheckDurationAndSend(send_name)                                                  \
@@ -73,7 +76,6 @@ static uint8_t USB_RX_BUF[USB_RX_DATA_SIZE];
 static uint32_t RECEIVE_TIME = 0;
 static uint32_t LATEST_RX_TIMESTAMP = 0;
 static uint32_t CONTINUE_RECEIVE_CNT = 0;
-static uint32_t ROBOT_CMD_RECEIVE_TIME = 0;
 
 // 数据发送结构体
 // clang-format off
@@ -81,8 +83,10 @@ static SendDataImu_s         SEND_DATA_IMU;
 static SendDataRobotMotion_s SEND_ROBOT_MOTION_DATA;
 static SendDataRobotTarget_s SEND_ROBOT_TARGET_DATA;
 static SendDataTorque_s     SEND_TORQUE_DATA;
+static SendDataPidDebug_s   SEND_PID_DEBUG_DATA;
 static SendDataMotorError_s SEND_MOTOR_ERROR_DATA;
 static SendDataMotor_s      SEND_MOTOR_DATA;
+static SendDataRlState_s    SEND_RL_STATE_DATA;
 
 // clang-format on
 
@@ -93,6 +97,10 @@ static Ref_t USB_REF_SNAPSHOT;
 // 数据接收结构体
 static ReceiveDataRobotCmd_s RECEIVE_ROBOT_CMD_DATA;
 static ReceiveDataVirtualRc_s RECEIVE_VIRTUAL_RC_DATA;
+static ReceiveDataRlLowCmd_s RECEIVE_RL_LOW_CMD_DATA;
+static uint32_t RL_LOW_CMD_RECEIVE_TIME = 0;
+static uint16_t RL_LOW_CMD_SEQUENCE = 0;
+static bool RL_LOW_CMD_RECEIVED = false;
 
 // 机器人控制指令数据
 RobotCmdData_t ROBOT_CMD_DATA;
@@ -106,6 +114,8 @@ typedef struct
     uint32_t RobotTarget;
     uint32_t Torque;
     uint32_t MotorData;
+    uint32_t PidDebug;
+    uint32_t RlState;
 } LastSendTime_t;
 static LastSendTime_t LAST_SEND_TIME;
 
@@ -123,14 +133,18 @@ static void UsbSendImuData(void);
 static void UsbSendRobotMotionData(void);
 static void UsbSendRobotTargetData(void);
 static void UsbSendTorqueData(void);
+static void UsbSendPidDebugData(void);
 static void UsbSendMotorErrorData(void);
 static void UsbSendMotorData(void);
+static void UsbSendRlStateData(void);
 
 /*******************************************************************************/
 /* Receive Function                                                            */
 /*******************************************************************************/
 static void GetCmdData(void);
 static void GetVirtualRcCtrlData(void);
+static bool RlLowCmdIsFinite(const ReceiveDataRlLowCmd_s * command);
+static bool IsSequenceNewer(uint16_t sequence, uint16_t previous);
 
 /******************************************************************/
 /* Task                                                           */
@@ -183,6 +197,7 @@ static void UsbInit(void)
     memset(&LAST_SEND_TIME, 0, sizeof(LastSendTime_t));
     memset(&RECEIVE_ROBOT_CMD_DATA, 0, sizeof(ReceiveDataRobotCmd_s));
     memset(&RECEIVE_VIRTUAL_RC_DATA, 0, sizeof(ReceiveDataVirtualRc_s));
+    memset(&RECEIVE_RL_LOW_CMD_DATA, 0, sizeof(ReceiveDataRlLowCmd_s));
     memset(&ROBOT_CMD_DATA, 0, sizeof(RobotCmdData_t));
     memset(&VIRTUAL_RC_CTRL, 0, sizeof(RC_ctrl_t));
 
@@ -221,6 +236,12 @@ static void UsbInit(void)
         sizeof(SEND_TORQUE_DATA.frame_header));
 
     // 13.初始化电机离线错误数据包
+    SEND_PID_DEBUG_DATA.frame_header.sof = SEND_SOF;
+    SEND_PID_DEBUG_DATA.frame_header.len = (uint8_t)(sizeof(SendDataPidDebug_s) - 6);
+    SEND_PID_DEBUG_DATA.frame_header.id = PID_DEBUG_SEND_ID;
+    append_CRC8_check_sum(
+        (uint8_t *)(&SEND_PID_DEBUG_DATA.frame_header), sizeof(SEND_PID_DEBUG_DATA.frame_header));
+
     SEND_MOTOR_ERROR_DATA.frame_header.sof = SEND_SOF;
     SEND_MOTOR_ERROR_DATA.frame_header.len = (uint8_t)(sizeof(SendDataMotorError_s) - 6);
     SEND_MOTOR_ERROR_DATA.frame_header.id = MOTOR_ERROR_SEND_ID;
@@ -229,6 +250,12 @@ static void UsbInit(void)
         sizeof(SEND_MOTOR_ERROR_DATA.frame_header));
 
     // 14.初始化电机数据包
+    SEND_RL_STATE_DATA.frame_header.sof = SEND_SOF;
+    SEND_RL_STATE_DATA.frame_header.len = (uint8_t)(sizeof(SendDataRlState_s) - 6);
+    SEND_RL_STATE_DATA.frame_header.id = RL_STATE_DATA_SEND_ID;
+    append_CRC8_check_sum(
+        (uint8_t *)(&SEND_RL_STATE_DATA.frame_header), sizeof(SEND_RL_STATE_DATA.frame_header));
+
     SEND_MOTOR_DATA.frame_header.sof = SEND_SOF;
     SEND_MOTOR_DATA.frame_header.len = (uint8_t)(sizeof(SendDataMotor_s) - 6);
     SEND_MOTOR_DATA.frame_header.id = MOTOR_DATA_SEND_ID;
@@ -255,6 +282,8 @@ static void UsbSendData(void)
     bool send_target = ((now - LAST_SEND_TIME.RobotTarget) >= SEND_DURATION_RobotTarget);
     bool send_torque = ((now - LAST_SEND_TIME.Torque) >= SEND_DURATION_Torque);
     bool send_motor_data = ((now - LAST_SEND_TIME.MotorData) >= SEND_DURATION_MotorData);
+    bool send_pid_debug = ((now - LAST_SEND_TIME.PidDebug) >= SEND_DURATION_PidDebug);
+    bool send_rl_state = ((now - LAST_SEND_TIME.RlState) >= SEND_DURATION_RlState);
 
     if (send_imu) {
         LAST_SEND_TIME.Imu = now;
@@ -262,7 +291,7 @@ static void UsbSendData(void)
     }
 
     // 运动、目标、力矩和角度包共用同一帧快照，避免同一轮采样时间不一致
-    if (send_motion || send_target || send_torque || send_motor_data) {
+    if (send_motion || send_target || send_torque || send_motor_data || send_rl_state) {
         if (ChassisSnapshotRead(
                 &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
             CHASSIS_SNAPSHOT_OK) {
@@ -286,6 +315,14 @@ static void UsbSendData(void)
         LAST_SEND_TIME.MotorData = now;
         UsbSendMotorData();
     }
+    if (send_pid_debug) {
+        LAST_SEND_TIME.PidDebug = now;
+        UsbSendPidDebugData();
+    }
+    if (send_rl_state) {
+        LAST_SEND_TIME.RlState = now;
+        UsbSendRlStateData();
+    }
 }
 
 /**
@@ -303,7 +340,8 @@ static void UsbReceiveData(void)
     uint16_t valid_len;
 
     // 读取数据，len 由底层返回本次可处理长度
-    len = USB_RECEIVE_LEN;
+    len = USB_RX_DATA_SIZE - (uint32_t)(rx_data_start_address - USB_RX_BUF);
+    if (len > USB_RECEIVE_LEN) len = USB_RECEIVE_LEN;
     USB_Receive(rx_data_start_address, &len);
 
     valid_len = (len > USB_RECEIVE_LEN) ? USB_RECEIVE_LEN : (uint16_t)len;
@@ -348,12 +386,29 @@ static void UsbReceiveData(void)
                     case ROBOT_CMD_DATA_RECEIVE_ID: {
                         if (data_len == (sizeof(ReceiveDataRobotCmd_s) - 6)) {
                             memcpy(&RECEIVE_ROBOT_CMD_DATA, sof_address, sizeof(ReceiveDataRobotCmd_s));
-                            ROBOT_CMD_RECEIVE_TIME = HAL_GetTick();
                         }
                     } break;
                     case VIRTUAL_RC_DATA_RECEIVE_ID: {
-                        memcpy(
-                            &RECEIVE_VIRTUAL_RC_DATA, sof_address, sizeof(ReceiveDataVirtualRc_s));
+                        if (frame_len == sizeof(ReceiveDataVirtualRc_s)) {
+                            memcpy(
+                                &RECEIVE_VIRTUAL_RC_DATA, sof_address, sizeof(ReceiveDataVirtualRc_s));
+                        }
+                    } break;
+                    case RL_LOW_CMD_DATA_RECEIVE_ID: {
+                        if (frame_len == sizeof(ReceiveDataRlLowCmd_s)) {
+                            ReceiveDataRlLowCmd_s command;
+                            memcpy(&command, sof_address, sizeof(command));
+                            const bool previous_command_timed_out = RL_LOW_CMD_RECEIVED &&
+                                ((HAL_GetTick() - RL_LOW_CMD_RECEIVE_TIME) > USB_OFFLINE_THRESHOLD);
+                            if (RlLowCmdIsFinite(&command) &&
+                                (!RL_LOW_CMD_RECEIVED || previous_command_timed_out ||
+                                 IsSequenceNewer(command.sequence, RL_LOW_CMD_SEQUENCE))) {
+                                memcpy(&RECEIVE_RL_LOW_CMD_DATA, &command, sizeof(command));
+                                RL_LOW_CMD_SEQUENCE = command.sequence;
+                                RL_LOW_CMD_RECEIVE_TIME = HAL_GetTick();
+                                RL_LOW_CMD_RECEIVED = true;
+                            }
+                        }
                     } break;
                     default:
                         break;
@@ -551,8 +606,6 @@ static void UsbSendMotorData(void)
 
 static void GetCmdData(void)
 {
-    uint8_t i;
-
     ROBOT_CMD_DATA.speed_vector.vx = RECEIVE_ROBOT_CMD_DATA.data.speed_vector.vx;
     ROBOT_CMD_DATA.speed_vector.vy = RECEIVE_ROBOT_CMD_DATA.data.speed_vector.vy;
     ROBOT_CMD_DATA.speed_vector.wz = RECEIVE_ROBOT_CMD_DATA.data.speed_vector.wz;
@@ -561,27 +614,120 @@ static void GetCmdData(void)
     ROBOT_CMD_DATA.chassis.pitch = RECEIVE_ROBOT_CMD_DATA.data.chassis.pitch;
     ROBOT_CMD_DATA.chassis.roll = RECEIVE_ROBOT_CMD_DATA.data.chassis.roll;
     ROBOT_CMD_DATA.chassis.leg_length = RECEIVE_ROBOT_CMD_DATA.data.chassis.leg_lenth;
-    ROBOT_CMD_DATA.motor_torque_enable = RECEIVE_ROBOT_CMD_DATA.data.motor_torque_enable != 0;
-    for (i = 0; i < 7; i++) {
-        ROBOT_CMD_DATA.motor_torque[i] = RECEIVE_ROBOT_CMD_DATA.data.motor_torque[i];
+}
+
+static void UsbSendPidDebugData(void)
+{
+    float fdb = 0.0f;
+    float ref = 0.0f;
+    float pid_out = 0.0f;
+    if (!ChassisGetRlPdDebug(&fdb, &ref, &pid_out)) return;
+
+    SEND_PID_DEBUG_DATA.time_stamp = HAL_GetTick();
+    SEND_PID_DEBUG_DATA.data.fdb = fdb;
+    SEND_PID_DEBUG_DATA.data.ref = ref;
+    SEND_PID_DEBUG_DATA.data.pid_out = pid_out;
+    append_CRC16_check_sum((uint8_t *)&SEND_PID_DEBUG_DATA, sizeof(SendDataPidDebug_s));
+    USB_Transmit((uint8_t *)&SEND_PID_DEBUG_DATA, sizeof(SendDataPidDebug_s));
+}
+
+static void UsbSendRlStateData(void)
+{
+    const float roll = USB_FDB_SNAPSHOT.body.roll;
+    const float pitch = USB_FDB_SNAPSHOT.body.pitch;
+    const float yaw = USB_FDB_SNAPSHOT.body.yaw;
+    const float pitch_dot = USB_FDB_SNAPSHOT.body.pitch_dot;
+    const float geometry_offset = 0.00316f * cosf(pitch) - 0.00138f * sinf(pitch);
+    float height_sum = 0.0f;
+    float heightdot_sum = 0.0f;
+
+    for (uint8_t i = 0; i < 2; ++i) {
+        const float l0 = USB_FDB_SNAPSHOT.leg[i].rod.L0;
+        const float dl0 = USB_FDB_SNAPSHOT.leg[i].rod.dL0;
+        const float theta = USB_FDB_SNAPSHOT.leg_state[i].theta;
+        const float dtheta = USB_FDB_SNAPSHOT.leg_state[i].theta_dot;
+        height_sum += WHEEL_RADIUS + l0 * cosf(theta) - geometry_offset;
+        heightdot_sum += dl0 * cosf(theta) - l0 * sinf(theta) * dtheta +
+                         (0.00316f * sinf(pitch) + 0.00138f * cosf(pitch)) * pitch_dot;
     }
-}
 
-bool GetScCmdMotorTorqueEnable(void)
-{
-    return ROBOT_CMD_DATA.motor_torque_enable &&
-           (HAL_GetTick() - ROBOT_CMD_RECEIVE_TIME <= USB_OFFLINE_THRESHOLD);
-}
+    const float cr = cosf(0.5f * roll);
+    const float sr = sinf(0.5f * roll);
+    const float cp = cosf(0.5f * pitch);
+    const float sp = sinf(0.5f * pitch);
+    const float cy = cosf(0.5f * yaw);
+    const float sy = sinf(0.5f * yaw);
 
-float GetScCmdMotorTorque(uint8_t motor_index)
-{
-    if (motor_index >= 7) return 0.0f;
-    return ROBOT_CMD_DATA.motor_torque[motor_index];
+    SEND_RL_STATE_DATA.time_stamp = HAL_GetTick();
+    ++SEND_RL_STATE_DATA.sequence;
+    SEND_RL_STATE_DATA.data.quat_wxyz[0] = cr * cp * cy + sr * sp * sy;
+    SEND_RL_STATE_DATA.data.quat_wxyz[1] = sr * cp * cy - cr * sp * sy;
+    SEND_RL_STATE_DATA.data.quat_wxyz[2] = cr * sp * cy + sr * cp * sy;
+    SEND_RL_STATE_DATA.data.quat_wxyz[3] = cr * cp * sy - sr * sp * cy;
+    SEND_RL_STATE_DATA.data.rpy[0] = roll;
+    SEND_RL_STATE_DATA.data.rpy[1] = pitch;
+    SEND_RL_STATE_DATA.data.rpy[2] = yaw;
+    SEND_RL_STATE_DATA.data.gyro_body[0] = USB_FDB_SNAPSHOT.body.roll_dot;
+    SEND_RL_STATE_DATA.data.gyro_body[1] = USB_FDB_SNAPSHOT.body.pitch_dot;
+    SEND_RL_STATE_DATA.data.gyro_body[2] = USB_FDB_SNAPSHOT.body.yaw_dot;
+    SEND_RL_STATE_DATA.data.vx_long = USB_FDB_SNAPSHOT.speed_vector.vx;
+    SEND_RL_STATE_DATA.data.height = 0.5f * height_sum;
+    SEND_RL_STATE_DATA.data.heightdot = 0.5f * heightdot_sum;
+
+    const uint8_t rl_to_fdb[7] = {0, 1, 4, 2, 3, 5, 6};
+    for (uint8_t i = 0; i < 7; ++i) {
+        SEND_RL_STATE_DATA.data.joint_pos[i] = USB_FDB_SNAPSHOT.motor_pos[rl_to_fdb[i]];
+        SEND_RL_STATE_DATA.data.joint_vel[i] = USB_FDB_SNAPSHOT.motor_vel[rl_to_fdb[i]];
+    }
+
+    float remote_vx = 0.0f;
+    float remote_wz = 0.0f;
+    float remote_height = 0.30f;
+    ChassisGetRlRemoteCommand(&remote_vx, &remote_wz, &remote_height);
+    SEND_RL_STATE_DATA.data.remote_vx = remote_vx;
+    SEND_RL_STATE_DATA.data.remote_wz = remote_wz;
+    SEND_RL_STATE_DATA.data.motor_offline_mask = g_motor_offline_mask;
+    SEND_RL_STATE_DATA.data.control_mode = ChassisIsRlControlSelected() ? 1U : 0U;
+    SEND_RL_STATE_DATA.data.remote_height_mm = (uint16_t)(remote_height * 1000.0f + 0.5f);
+    append_CRC16_check_sum((uint8_t *)&SEND_RL_STATE_DATA, sizeof(SendDataRlState_s));
+    USB_Transmit((uint8_t *)&SEND_RL_STATE_DATA, sizeof(SendDataRlState_s));
 }
 
 static void GetVirtualRcCtrlData(void)
 {
     memcpy(&VIRTUAL_RC_CTRL, &RECEIVE_VIRTUAL_RC_DATA.data, sizeof(RC_ctrl_t));
+}
+
+static bool RlLowCmdIsFinite(const ReceiveDataRlLowCmd_s * command)
+{
+    for (uint8_t i = 0; i < 7; ++i) {
+        if (!isfinite(command->data.q_des[i]) || !isfinite(command->data.dq_des[i]) ||
+            !isfinite(command->data.kp[i]) || !isfinite(command->data.kd[i]) ||
+            !isfinite(command->data.tau_ff[i]) || !isfinite(command->data.q_fdb_offset[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool IsSequenceNewer(uint16_t sequence, uint16_t previous)
+{
+    return ((int16_t)(sequence - previous) > 0);
+}
+
+bool GetRlLowCmdData(ReceiveDataRlLowCmd_s * command)
+{
+    if ((command == NULL) || !RL_LOW_CMD_RECEIVED || !RECEIVE_RL_LOW_CMD_DATA.enable ||
+        ((HAL_GetTick() - RL_LOW_CMD_RECEIVE_TIME) > USB_OFFLINE_THRESHOLD)) {
+        return false;
+    }
+    memcpy(command, &RECEIVE_RL_LOW_CMD_DATA, sizeof(ReceiveDataRlLowCmd_s));
+    return true;
+}
+
+bool IsRlLowCmdSessionEnabled(void)
+{
+    return RL_LOW_CMD_RECEIVED && (RECEIVE_RL_LOW_CMD_DATA.enable != 0);
 }
 
 /*******************************************************************************/

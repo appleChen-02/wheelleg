@@ -39,8 +39,8 @@
 #include "stdbool.h"
 #include "stdio.h"
 #include "string.h"
-#include "supervisory_computer_cmd.h"
 #include "usb_debug.h"
+#include "usb_task.h"
 #include "user_lib.h"
 
 // 一些内部的配置
@@ -52,9 +52,21 @@
 #define VX_REF_ALPHA 0.12f
 #define TAIL_BETA_ALPHA 0.15f
 
+#define RL_FRONT_OFFSET_RAD 0.0f
+#define RL_MAX_LEG_TORQUE   40.0f
+#define RL_MAX_WHEEL_TORQUE 4.5f
+#define RL_MAX_TAIL_TORQUE  7.0f
+#define RL_TARGET_HEIGHT_MIN_M    0.24f
+#define RL_TARGET_HEIGHT_CENTER_M 0.30f
+#define RL_TARGET_HEIGHT_MAX_M    0.34f
+
 // 电机离线掩码，供 USB 任务读取
 // bit0~3: J0~J3关节, bit4~5: W0~W1轮子, bit6: 尾巴
 uint8_t g_motor_offline_mask = 0;
+static bool RL_PD_DEBUG_VALID = false;
+static float RL_PD_DEBUG_FDB = 0.0f;
+static float RL_PD_DEBUG_REF = 0.0f;
+static float RL_PD_DEBUG_OUT = 0.0f;
 
 // Parameters on ---------------------
 #define MS_TO_S 0.001f
@@ -126,6 +138,39 @@ void ChassisPublish(void)
     ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 static void ResetXStateOnModeSwitch(void);
+
+bool ChassisIsRlControlSelected(void)
+{
+    if (CHASSIS.rc == NULL || GetRcOffline()) return false;
+    return switch_is_up(CHASSIS.rc->rc.ch[RL_CONTROL_CHANNEL]);
+}
+
+void ChassisGetRlRemoteCommand(float * vx, float * wz, float * target_height)
+{
+    int16_t rc_x = 0;
+    int16_t rc_wz = 0;
+    int16_t rc_height = 0;
+
+    if (vx == NULL || wz == NULL || target_height == NULL) return;
+    *vx = 0.0f;
+    *wz = 0.0f;
+    *target_height = RL_TARGET_HEIGHT_CENTER_M;
+    if (CHASSIS.rc == NULL || GetRcOffline()) return;
+
+    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_X_CHANNEL], rc_x, CHASSIS_RC_DEADLINE);
+    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_WZ_CHANNEL], rc_wz, CHASSIS_RC_DEADLINE);
+    rc_deadband_limit(CHASSIS.rc->rc.ch[CHASSIS_LENGTH_CHANNEL], rc_height, CHASSIS_RC_DEADLINE);
+    *vx = rc_x * RC_TO_ONE * MAX_SPEED_VECTOR_VX;
+    *wz = -rc_wz * RC_TO_ONE * MAX_SPEED_VECTOR_WZ;
+    const float normalized_height = fp32_constrain(rc_height * RC_TO_ONE, -1.0f, 1.0f);
+    if (normalized_height >= 0.0f) {
+        *target_height = RL_TARGET_HEIGHT_CENTER_M +
+                         (RL_TARGET_HEIGHT_MAX_M - RL_TARGET_HEIGHT_CENTER_M) * normalized_height;
+    } else {
+        *target_height = RL_TARGET_HEIGHT_CENTER_M +
+                         (RL_TARGET_HEIGHT_CENTER_M - RL_TARGET_HEIGHT_MIN_M) * normalized_height;
+    }
+}
 
 /******************************************************************/
 /* Init                                                           */
@@ -515,6 +560,7 @@ static void UpdateMotorStatus(void)
         GetMotorMeasure(&CHASSIS.joint_motor[i]);
         CHASSIS.fdb.motor_pos[i] = CHASSIS.joint_motor[i].fdb.pos;
         CHASSIS.fdb.motor_torque[i] = CHASSIS.joint_motor[i].fdb.tor;
+        CHASSIS.fdb.motor_vel[i] = CHASSIS.joint_motor[i].fdb.vel;
         if (CHASSIS.joint_motor[i].offline) {
             g_motor_offline_mask |= (1 << i);
         }
@@ -524,6 +570,7 @@ static void UpdateMotorStatus(void)
         GetMotorMeasure(&CHASSIS.wheel_motor[i]);
         CHASSIS.fdb.motor_pos[4 + i] = CHASSIS.wheel_motor[i].fdb.pos;
         CHASSIS.fdb.motor_torque[4 + i] = CHASSIS.wheel_motor[i].fdb.tor;
+        CHASSIS.fdb.motor_vel[4 + i] = CHASSIS.wheel_motor[i].fdb.vel;
         if (CHASSIS.wheel_motor[i].offline) {
             g_motor_offline_mask |= (1 << (4 + i));
         }
@@ -532,6 +579,7 @@ static void UpdateMotorStatus(void)
     GetMotorMeasure(&CHASSIS.tail_motor);
     CHASSIS.fdb.motor_pos[6] = CHASSIS.tail_motor.fdb.pos;
     CHASSIS.fdb.motor_torque[6] = CHASSIS.tail_motor.fdb.tor;
+    CHASSIS.fdb.motor_vel[6] = CHASSIS.tail_motor.fdb.vel;
     if (CHASSIS.tail_motor.offline) {
         g_motor_offline_mask |= (1 << 6);
     }
@@ -2532,6 +2580,11 @@ static void ConsoleStandUp(void)  // 待修改
 
 static void SendJointMotorCmd(void);
 static void SendWheelMotorCmd(void);
+static bool ApplyRlPdControl(void);
+static uint8_t RlSelectDebugAxis(const ReceiveDataRlLowCmd_s * command);
+static float RlWrapToPi(float angle);
+static float RlPositionTorque(float q_des, float q_fdb, float dq_des, float dq_fdb,
+                              float kp, float kd, float tau_ff, float limit);
 
 /**
  * @brief          发送控制量
@@ -2540,8 +2593,122 @@ static void SendWheelMotorCmd(void);
  */
 void ChassisSendCmd(void)
 {
+    static bool last_rl_selected = false;
+    const bool rl_selected = ChassisIsRlControlSelected();
+
+    if (last_rl_selected && !rl_selected) {
+        ResetXStateOnModeSwitch();
+        last_rl_selected = false;
+        RL_PD_DEBUG_VALID = false;
+        LkMultipleTorqueControl_MG6012(JOINT_CAN, 0, 0, 0, 0);
+        LkMultipleTorqueControl_MF9025_MG5010(WHEEL_CAN, 0, 0, 0, 0);
+        return;
+    }
+    last_rl_selected = rl_selected;
+
+    if (rl_selected) {
+        const bool unsafe = (CHASSIS.error_code != 0) ||
+                            (CHASSIS.mode == CHASSIS_SAFE) ||
+                            (CHASSIS.mode == CHASSIS_OFF);
+        if (unsafe || !ApplyRlPdControl()) {
+            RL_PD_DEBUG_VALID = false;
+            LkMultipleTorqueControl_MG6012(JOINT_CAN, 0, 0, 0, 0);
+            LkMultipleTorqueControl_MF9025_MG5010(WHEEL_CAN, 0, 0, 0, 0);
+        }
+        return;
+    }
+    RL_PD_DEBUG_VALID = false;
     SendJointMotorCmd();
     SendWheelMotorCmd();
+}
+
+static bool ApplyRlPdControl(void)
+{
+    ReceiveDataRlLowCmd_s command;
+    if (!GetRlLowCmdData(&command)) return false;
+
+    float q_rl[7];
+    float dq_rl[7];
+    float tau_rl[7];
+
+    q_rl[0] = -CHASSIS.fdb.leg[0].joint.Phi4;
+    dq_rl[0] = -CHASSIS.fdb.leg[0].joint.dPhi4;
+    q_rl[1] = RlWrapToPi(M_PI - CHASSIS.fdb.leg[0].joint.Phi1);
+    dq_rl[1] = -CHASSIS.fdb.leg[0].joint.dPhi1;
+    q_rl[2] = 0.0f;
+    dq_rl[2] = CHASSIS.fdb.leg[0].wheel.Velocity;
+    q_rl[3] = -CHASSIS.fdb.leg[1].joint.Phi4;
+    dq_rl[3] = -CHASSIS.fdb.leg[1].joint.dPhi4;
+    q_rl[4] = RlWrapToPi(M_PI - CHASSIS.fdb.leg[1].joint.Phi1);
+    dq_rl[4] = -CHASSIS.fdb.leg[1].joint.dPhi1;
+    q_rl[5] = 0.0f;
+    dq_rl[5] = CHASSIS.fdb.leg[1].wheel.Velocity;
+    q_rl[6] = RlWrapToPi(CHASSIS.fdb.tail.Beta + RL_FRONT_OFFSET_RAD);
+    dq_rl[6] = CHASSIS.fdb.tail.dBeta;
+
+    for (uint8_t i = 0; i < 7; ++i) {
+        if (i != 2 && i != 5) q_rl[i] = RlWrapToPi(q_rl[i] + command.data.q_fdb_offset[i]);
+    }
+    for (uint8_t i = 0; i < 7; ++i) {
+        const float limit = (i == 2 || i == 5) ? RL_MAX_WHEEL_TORQUE :
+                            (i == 6) ? RL_MAX_TAIL_TORQUE : RL_MAX_LEG_TORQUE;
+        if (i == 2 || i == 5) {
+            tau_rl[i] = fp32_constrain(
+                command.data.kd[i] * (command.data.dq_des[i] - dq_rl[i]) + command.data.tau_ff[i],
+                -limit, limit);
+        } else {
+            tau_rl[i] = RlPositionTorque(
+                command.data.q_des[i], q_rl[i], command.data.dq_des[i], dq_rl[i],
+                command.data.kp[i], command.data.kd[i], command.data.tau_ff[i], limit);
+        }
+    }
+
+    const uint8_t debug_axis = RlSelectDebugAxis(&command);
+    RL_PD_DEBUG_FDB = q_rl[debug_axis];
+    RL_PD_DEBUG_REF = (debug_axis == 2 || debug_axis == 5) ?
+        command.data.dq_des[debug_axis] : command.data.q_des[debug_axis];
+    RL_PD_DEBUG_OUT = tau_rl[debug_axis];
+    RL_PD_DEBUG_VALID = true;
+
+    LkMultipleTorqueControl_MG6012(
+        JOINT_CAN, +tau_rl[1], -tau_rl[0], -tau_rl[4], +tau_rl[3]);
+    LkMultipleTorqueControl_MF9025_MG5010(
+        WHEEL_CAN, +tau_rl[2], -tau_rl[5], -tau_rl[6], 0);
+    return true;
+}
+
+bool ChassisGetRlPdDebug(float * fdb, float * ref, float * pid_out)
+{
+    if ((fdb == NULL) || (ref == NULL) || (pid_out == NULL) || !RL_PD_DEBUG_VALID) return false;
+    *fdb = RL_PD_DEBUG_FDB;
+    *ref = RL_PD_DEBUG_REF;
+    *pid_out = RL_PD_DEBUG_OUT;
+    return true;
+}
+
+static uint8_t RlSelectDebugAxis(const ReceiveDataRlLowCmd_s * command)
+{
+    if (command == NULL) return 0;
+    for (uint8_t i = 0; i < 7; ++i) {
+        if ((fabsf(command->data.kp[i]) > 1e-6f) ||
+            (fabsf(command->data.kd[i]) > 1e-6f) ||
+            (fabsf(command->data.tau_ff[i]) > 1e-6f)) return i;
+    }
+    return 0;
+}
+
+static float RlWrapToPi(float angle)
+{
+    while (angle > M_PI) angle -= DOUBLE_PI;
+    while (angle < -M_PI) angle += DOUBLE_PI;
+    return angle;
+}
+
+static float RlPositionTorque(float q_des, float q_fdb, float dq_des, float dq_fdb,
+                              float kp, float kd, float tau_ff, float limit)
+{
+    return fp32_constrain(
+        kp * RlWrapToPi(q_des - q_fdb) + kd * (dq_des - dq_fdb) + tau_ff, -limit, limit);
 }
 
 /**
@@ -2554,15 +2721,9 @@ static void SendJointMotorCmd(void)
         case CHASSIS_NOTAIL:
         case CHASSIS_BIPEDAL:
         case CHASSIS_TRIPOD: {
-            if (GetScCmdMotorTorqueEnable()) {
-                LkMultipleTorqueControl_MG6012(
-                    JOINT_CAN, GetScCmdMotorTorque(0), GetScCmdMotorTorque(1),
-                    GetScCmdMotorTorque(2), GetScCmdMotorTorque(3));
-            } else {
-                LkMultipleTorqueControl_MG6012(
-                    JOINT_CAN, CHASSIS.joint_motor[0].set.tor, CHASSIS.joint_motor[1].set.tor,
-                    CHASSIS.joint_motor[2].set.tor, CHASSIS.joint_motor[3].set.tor);
-            }
+            LkMultipleTorqueControl_MG6012(
+                JOINT_CAN, CHASSIS.joint_motor[0].set.tor, CHASSIS.joint_motor[1].set.tor,
+                CHASSIS.joint_motor[2].set.tor, CHASSIS.joint_motor[3].set.tor);
 
             // LkMultipleTorqueControl_MG6012(JOINT_CAN, 0.0f, 0.0f, 0.0f, 0.0f);
         } break;
@@ -2590,17 +2751,11 @@ static void SendWheelMotorCmd(void)
         case CHASSIS_NOTAIL:
         case CHASSIS_BIPEDAL:
         case CHASSIS_TRIPOD: {
-            if (GetScCmdMotorTorqueEnable()) {
-                LkMultipleTorqueControl_MF9025_MG5010(
-                    WHEEL_CAN, GetScCmdMotorTorque(4), GetScCmdMotorTorque(5),
-                    GetScCmdMotorTorque(6), 0);
-            } else {
-                if (CHASSIS.tail_motor.set.tor > 7.0f) CHASSIS.tail_motor.set.tor = 7.0f;
-                if (CHASSIS.tail_motor.set.tor < -7.0f) CHASSIS.tail_motor.set.tor = -7.0f;
-                LkMultipleTorqueControl_MF9025_MG5010(
-                    WHEEL_CAN, CHASSIS.wheel_motor[0].set.tor, CHASSIS.wheel_motor[1].set.tor,
-                    CHASSIS.tail_motor.set.tor, 0);
-            }
+            if (CHASSIS.tail_motor.set.tor > 7.0f) CHASSIS.tail_motor.set.tor = 7.0f;
+            if (CHASSIS.tail_motor.set.tor < -7.0f) CHASSIS.tail_motor.set.tor = -7.0f;
+            LkMultipleTorqueControl_MF9025_MG5010(
+                WHEEL_CAN, CHASSIS.wheel_motor[0].set.tor, CHASSIS.wheel_motor[1].set.tor,
+                CHASSIS.tail_motor.set.tor, 0);
 
             // LkMultipleTorqueControl_MF9025_MG5010(WHEEL_CAN, 0.0f, 0.0f, 3.0f, 0.0f);
             // printf("yaw = %.3f\r\n", CHASSIS.fdb.body.yaw);
