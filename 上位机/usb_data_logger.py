@@ -98,15 +98,18 @@ ID_ROBOT_MOTION = 0x08
 ID_ROBOT_TARGET = 0x0B
 ID_TORQUE = 0x0C
 ID_MOTOR_ERROR = 0x0D
-ID_MOTOR_ANGLE = 0x0E
+ID_MOTOR_DATA = 0x0E
 
-# 电机角度 payload: <I7f> (tick_ms + 7 floats)
-MOTOR_ANGLE_STRUCT = struct.Struct("<I7f")
-MOTOR_ANGLE_COLUMNS = [
+# 电机数据 payload: <I14f> (tick_ms + 7 positions + 7 feedback torques)
+MOTOR_DATA_STRUCT = struct.Struct("<I14f")
+MOTOR_DATA_COLUMNS = [
     "tick_ms",
     "J0_pos", "J1_pos", "J2_pos", "J3_pos",
     "W0_pos", "W1_pos",
     "Tail_pos",
+    "J0_actual_torque", "J1_actual_torque", "J2_actual_torque", "J3_actual_torque",
+    "W0_actual_torque", "W1_actual_torque",
+    "Tail_actual_torque",
 ]
 
 # 电机离线错误 payload: <IB3s> (tick_ms + offline_mask + reserved)
@@ -235,8 +238,8 @@ class CsvSink:
         self.motor_error_file = open(
             os.path.join(outdir, "motor_error.csv"), "w", newline="", encoding="utf-8"
         )
-        self.motor_angle_file = open(
-            os.path.join(outdir, "motor_angle.csv"), "w", newline="", encoding="utf-8"
+        self.motor_data_file = open(
+            os.path.join(outdir, "motor_data.csv"), "w", newline="", encoding="utf-8"
         )
         self.unknown_file = open(
             os.path.join(outdir, "unknown_frames.csv"), "w", newline="", encoding="utf-8"
@@ -247,7 +250,7 @@ class CsvSink:
         self.target_writer = csv.writer(self.target_file)
         self.torque_writer = csv.writer(self.torque_file)
         self.motor_error_writer = csv.writer(self.motor_error_file)
-        self.motor_angle_writer = csv.writer(self.motor_angle_file)
+        self.motor_data_writer = csv.writer(self.motor_data_file)
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
@@ -257,7 +260,7 @@ class CsvSink:
         self.target_writer.writerow(["host_time_s"] + ROBOT_SNAPSHOT_COLUMNS)
         self.torque_writer.writerow(["host_time_s"] + TORQUE_COLUMNS)
         self.motor_error_writer.writerow(["host_time_s", "tick_ms", "offline_mask", "offline_motors"])
-        self.motor_angle_writer.writerow(["host_time_s"] + MOTOR_ANGLE_COLUMNS)
+        self.motor_data_writer.writerow(["host_time_s"] + MOTOR_DATA_COLUMNS)
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
@@ -265,7 +268,7 @@ class CsvSink:
         self.target_rows: List[List[float]] = []
         self.torque_rows: List[List[float]] = []
         self.motor_error_rows: List[List[object]] = []
-        self.motor_angle_rows: List[List[float]] = []
+        self.motor_data_rows: List[List[float]] = []
 
     def write_imu(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
@@ -292,10 +295,10 @@ class CsvSink:
         self.motor_error_writer.writerow(row)
         self.motor_error_rows.append(row)
 
-    def write_motor_angle(self, host_t: float, row: List[float]) -> None:
+    def write_motor_data(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
-        self.motor_angle_writer.writerow(line)
-        self.motor_angle_rows.append(line)
+        self.motor_data_writer.writerow(line)
+        self.motor_data_rows.append(line)
 
     def write_unknown(self, host_t: float, pkt_id: int, payload_len: int, frame_hex: str) -> None:
         self.unknown_writer.writerow([host_t, f"0x{pkt_id:02X}", payload_len, frame_hex])
@@ -306,7 +309,7 @@ class CsvSink:
         self.target_file.flush()
         self.torque_file.flush()
         self.motor_error_file.flush()
-        self.motor_angle_file.flush()
+        self.motor_data_file.flush()
         self.unknown_file.flush()
 
     def close(self) -> None:
@@ -316,7 +319,7 @@ class CsvSink:
         self.target_file.close()
         self.torque_file.close()
         self.motor_error_file.close()
-        self.motor_angle_file.close()
+        self.motor_data_file.close()
         self.unknown_file.close()
 
 
@@ -430,10 +433,10 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "offline_motors": motor_offline_names(offline_mask),
         }
 
-    if pkt_id == ID_MOTOR_ANGLE and len(payload) == MOTOR_ANGLE_STRUCT.size:
-        row = list(MOTOR_ANGLE_STRUCT.unpack(payload))
+    if pkt_id == ID_MOTOR_DATA and len(payload) == MOTOR_DATA_STRUCT.size:
+        row = list(MOTOR_DATA_STRUCT.unpack(payload))
         return {
-            "type": "motor_angle",
+            "type": "motor_data",
             "host_time": host_t,
             "row": row,
         }
@@ -588,9 +591,9 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "motor_error": np.array(sink.motor_error_rows, dtype=object)
         if sink.motor_error_rows
         else np.empty((0, 4), dtype=object),
-        "motor_angle": np.array(sink.motor_angle_rows, dtype=float)
-        if sink.motor_angle_rows
-        else np.empty((0, 9), dtype=float),
+        "motor_data": np.array(sink.motor_data_rows, dtype=float)
+        if sink.motor_data_rows
+        else np.empty((0, 16), dtype=float),
     }
 
     mat_path = os.path.join(outdir, "usb_log.mat")
@@ -706,15 +709,16 @@ def run(args: argparse.Namespace) -> int:
                                 f"[ERROR] Motor Offline! mask=0x{offline_mask:02X} -> {offline_motors}",
                                 flush=True,
                             )
-                        elif kind == "motor_angle":
+                        elif kind == "motor_data":
                             row = list(decoded["row"])
-                            sink.write_motor_angle(host_t, row)
+                            sink.write_motor_data(host_t, row)
                             if getattr(args, "realtime", False):
                                 ts = time.strftime("%H:%M:%S", time.localtime(host_t))
                                 message = (
-                                    f"[ANGLE] {ts} tick={int(row[0])} "
+                                    f"[MOTOR] {ts} tick={int(row[0])} "
                                     f"J0={row[1]:.3f} J1={row[2]:.3f} J2={row[3]:.3f} J3={row[4]:.3f} "
-                                    f"W0={row[5]:.3f} W1={row[6]:.3f} Tail={row[7]:.3f}"
+                                    f"W0={row[5]:.3f} W1={row[6]:.3f} Tail={row[7]:.3f} "
+                                    f"T_J0={row[8]:.3f} T_W0={row[12]:.3f} T_Tail={row[14]:.3f}"
                                 )
                                 realtime_emit_append(message, args)
                         else:

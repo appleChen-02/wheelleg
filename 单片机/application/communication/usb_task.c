@@ -49,7 +49,7 @@ uint32_t usb_high_water;
 #define SEND_DURATION_RobotMotion 10  // ms
 #define SEND_DURATION_RobotTarget 10  // ms
 #define SEND_DURATION_Torque      10  // ms
-#define SEND_DURATION_MotorAngle  10  // ms
+#define SEND_DURATION_MotorData   10  // ms
 
 // clang-format on
 
@@ -73,6 +73,7 @@ static uint8_t USB_RX_BUF[USB_RX_DATA_SIZE];
 static uint32_t RECEIVE_TIME = 0;
 static uint32_t LATEST_RX_TIMESTAMP = 0;
 static uint32_t CONTINUE_RECEIVE_CNT = 0;
+static uint32_t ROBOT_CMD_RECEIVE_TIME = 0;
 
 // 数据发送结构体
 // clang-format off
@@ -81,7 +82,7 @@ static SendDataRobotMotion_s SEND_ROBOT_MOTION_DATA;
 static SendDataRobotTarget_s SEND_ROBOT_TARGET_DATA;
 static SendDataTorque_s     SEND_TORQUE_DATA;
 static SendDataMotorError_s SEND_MOTOR_ERROR_DATA;
-static SendDataMotorAngle_s SEND_MOTOR_ANGLE_DATA;
+static SendDataMotor_s      SEND_MOTOR_DATA;
 
 // clang-format on
 
@@ -104,7 +105,7 @@ typedef struct
     uint32_t RobotMotion;
     uint32_t RobotTarget;
     uint32_t Torque;
-    uint32_t MotorAngle;
+    uint32_t MotorData;
 } LastSendTime_t;
 static LastSendTime_t LAST_SEND_TIME;
 
@@ -123,7 +124,7 @@ static void UsbSendRobotMotionData(void);
 static void UsbSendRobotTargetData(void);
 static void UsbSendTorqueData(void);
 static void UsbSendMotorErrorData(void);
-static void UsbSendMotorAngleData(void);
+static void UsbSendMotorData(void);
 
 /*******************************************************************************/
 /* Receive Function                                                            */
@@ -227,13 +228,12 @@ static void UsbInit(void)
         (uint8_t *)(&SEND_MOTOR_ERROR_DATA.frame_header),
         sizeof(SEND_MOTOR_ERROR_DATA.frame_header));
 
-    // 14.初始化电机角度数据包
-    SEND_MOTOR_ANGLE_DATA.frame_header.sof = SEND_SOF;
-    SEND_MOTOR_ANGLE_DATA.frame_header.len = (uint8_t)(sizeof(SendDataMotorAngle_s) - 6);
-    SEND_MOTOR_ANGLE_DATA.frame_header.id = MOTOR_ANGLE_SEND_ID;
+    // 14.初始化电机数据包
+    SEND_MOTOR_DATA.frame_header.sof = SEND_SOF;
+    SEND_MOTOR_DATA.frame_header.len = (uint8_t)(sizeof(SendDataMotor_s) - 6);
+    SEND_MOTOR_DATA.frame_header.id = MOTOR_DATA_SEND_ID;
     append_CRC8_check_sum(
-        (uint8_t *)(&SEND_MOTOR_ANGLE_DATA.frame_header),
-        sizeof(SEND_MOTOR_ANGLE_DATA.frame_header));
+        (uint8_t *)(&SEND_MOTOR_DATA.frame_header), sizeof(SEND_MOTOR_DATA.frame_header));
 }
 
 /**
@@ -254,7 +254,7 @@ static void UsbSendData(void)
     bool send_motion = ((now - LAST_SEND_TIME.RobotMotion) >= SEND_DURATION_RobotMotion);
     bool send_target = ((now - LAST_SEND_TIME.RobotTarget) >= SEND_DURATION_RobotTarget);
     bool send_torque = ((now - LAST_SEND_TIME.Torque) >= SEND_DURATION_Torque);
-    bool send_angle = ((now - LAST_SEND_TIME.MotorAngle) >= SEND_DURATION_MotorAngle);
+    bool send_motor_data = ((now - LAST_SEND_TIME.MotorData) >= SEND_DURATION_MotorData);
 
     if (send_imu) {
         LAST_SEND_TIME.Imu = now;
@@ -262,7 +262,7 @@ static void UsbSendData(void)
     }
 
     // 运动、目标、力矩和角度包共用同一帧快照，避免同一轮采样时间不一致
-    if (send_motion || send_target || send_torque || send_angle) {
+    if (send_motion || send_target || send_torque || send_motor_data) {
         if (ChassisSnapshotRead(
                 &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
             CHASSIS_SNAPSHOT_OK) {
@@ -282,9 +282,9 @@ static void UsbSendData(void)
         LAST_SEND_TIME.Torque = now;
         UsbSendTorqueData();
     }
-    if (send_angle) {
-        LAST_SEND_TIME.MotorAngle = now;
-        UsbSendMotorAngleData();
+    if (send_motor_data) {
+        LAST_SEND_TIME.MotorData = now;
+        UsbSendMotorData();
     }
 }
 
@@ -346,7 +346,10 @@ static void UsbReceiveData(void)
             if (crc16_ok) {
                 switch (data_id) {
                     case ROBOT_CMD_DATA_RECEIVE_ID: {
-                        memcpy(&RECEIVE_ROBOT_CMD_DATA, sof_address, sizeof(ReceiveDataRobotCmd_s));
+                        if (data_len == (sizeof(ReceiveDataRobotCmd_s) - 6)) {
+                            memcpy(&RECEIVE_ROBOT_CMD_DATA, sof_address, sizeof(ReceiveDataRobotCmd_s));
+                            ROBOT_CMD_RECEIVE_TIME = HAL_GetTick();
+                        }
                     } break;
                     case VIRTUAL_RC_DATA_RECEIVE_ID: {
                         memcpy(
@@ -527,22 +530,20 @@ static void UsbSendMotorErrorData(void)
 }
 
 /**
- * @brief 发送电机角度数据 (从 snapshot 读取)
+ * @brief 发送电机数据 (从 snapshot 读取)
  */
-static void UsbSendMotorAngleData(void)
+static void UsbSendMotorData(void)
 {
-    SEND_MOTOR_ANGLE_DATA.time_stamp = HAL_GetTick();
+    uint8_t i;
 
-    SEND_MOTOR_ANGLE_DATA.data.joint[0] = USB_FDB_SNAPSHOT.motor_pos[0];
-    SEND_MOTOR_ANGLE_DATA.data.joint[1] = USB_FDB_SNAPSHOT.motor_pos[1];
-    SEND_MOTOR_ANGLE_DATA.data.joint[2] = USB_FDB_SNAPSHOT.motor_pos[2];
-    SEND_MOTOR_ANGLE_DATA.data.joint[3] = USB_FDB_SNAPSHOT.motor_pos[3];
-    SEND_MOTOR_ANGLE_DATA.data.wheel[0] = USB_FDB_SNAPSHOT.motor_pos[4];
-    SEND_MOTOR_ANGLE_DATA.data.wheel[1] = USB_FDB_SNAPSHOT.motor_pos[5];
-    SEND_MOTOR_ANGLE_DATA.data.tail     = USB_FDB_SNAPSHOT.motor_pos[6];
+    SEND_MOTOR_DATA.time_stamp = HAL_GetTick();
+    for (i = 0; i < 7; i++) {
+        SEND_MOTOR_DATA.data.position[i] = USB_FDB_SNAPSHOT.motor_pos[i];
+        SEND_MOTOR_DATA.data.torque[i] = USB_FDB_SNAPSHOT.motor_torque[i];
+    }
 
-    append_CRC16_check_sum((uint8_t *)&SEND_MOTOR_ANGLE_DATA, sizeof(SendDataMotorAngle_s));
-    USB_Transmit((uint8_t *)&SEND_MOTOR_ANGLE_DATA, sizeof(SendDataMotorAngle_s));
+    append_CRC16_check_sum((uint8_t *)&SEND_MOTOR_DATA, sizeof(SendDataMotor_s));
+    USB_Transmit((uint8_t *)&SEND_MOTOR_DATA, sizeof(SendDataMotor_s));
 }
 /*******************************************************************************/
 /* Receive Function                                                            */
@@ -550,6 +551,8 @@ static void UsbSendMotorAngleData(void)
 
 static void GetCmdData(void)
 {
+    uint8_t i;
+
     ROBOT_CMD_DATA.speed_vector.vx = RECEIVE_ROBOT_CMD_DATA.data.speed_vector.vx;
     ROBOT_CMD_DATA.speed_vector.vy = RECEIVE_ROBOT_CMD_DATA.data.speed_vector.vy;
     ROBOT_CMD_DATA.speed_vector.wz = RECEIVE_ROBOT_CMD_DATA.data.speed_vector.wz;
@@ -558,6 +561,22 @@ static void GetCmdData(void)
     ROBOT_CMD_DATA.chassis.pitch = RECEIVE_ROBOT_CMD_DATA.data.chassis.pitch;
     ROBOT_CMD_DATA.chassis.roll = RECEIVE_ROBOT_CMD_DATA.data.chassis.roll;
     ROBOT_CMD_DATA.chassis.leg_length = RECEIVE_ROBOT_CMD_DATA.data.chassis.leg_lenth;
+    ROBOT_CMD_DATA.motor_torque_enable = RECEIVE_ROBOT_CMD_DATA.data.motor_torque_enable != 0;
+    for (i = 0; i < 7; i++) {
+        ROBOT_CMD_DATA.motor_torque[i] = RECEIVE_ROBOT_CMD_DATA.data.motor_torque[i];
+    }
+}
+
+bool GetScCmdMotorTorqueEnable(void)
+{
+    return ROBOT_CMD_DATA.motor_torque_enable &&
+           (HAL_GetTick() - ROBOT_CMD_RECEIVE_TIME <= USB_OFFLINE_THRESHOLD);
+}
+
+float GetScCmdMotorTorque(uint8_t motor_index)
+{
+    if (motor_index >= 7) return 0.0f;
+    return ROBOT_CMD_DATA.motor_torque[motor_index];
 }
 
 static void GetVirtualRcCtrlData(void)

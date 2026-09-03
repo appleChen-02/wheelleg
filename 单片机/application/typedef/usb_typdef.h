@@ -18,7 +18,7 @@
 #define ROBOT_TARGET_DATA_SEND_ID ((uint8_t)0x0B)
 #define TORQUE_DATA_SEND_ID       ((uint8_t)0x0C)
 #define MOTOR_ERROR_SEND_ID       ((uint8_t)0x0D)
-#define MOTOR_ANGLE_SEND_ID       ((uint8_t)0x0E)
+#define MOTOR_DATA_SEND_ID        ((uint8_t)0x0E)
 
 #define ROBOT_CMD_DATA_RECEIVE_ID  ((uint8_t)0x01)
 #define VIRTUAL_RC_DATA_RECEIVE_ID ((uint8_t)0x03)
@@ -166,21 +166,21 @@ typedef struct
     uint16_t crc;
 } __packed__ SendDataMotorError_s;
 
-// 电机角度数据包
+// 电机数据包
 typedef struct
 {
     FrameHeader_t frame_header;  // 数据段id = 0x0E
     uint32_t time_stamp;
     struct
     {
-        float joint[4];   // rad J0~J3 髋关节
-        float wheel[2];   // rad W0~W1 轮子
-        float tail;       // rad Tail 尾巴
+        float position[7];  // rad [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
+        float torque[7];    // N*m 电机反馈力矩，电机侧 iq 换算值
     } __packed__ data;
     uint16_t crc;
-} __packed__ SendDataMotorAngle_s;
+} __packed__ SendDataMotor_s;
 
 /*-------------------- Receive --------------------*/
+// 机器人控制指令数据包
 typedef struct RobotCmdData
 {
     FrameHeader_t frame_header;  // 数据段id = 0x01
@@ -200,6 +200,9 @@ typedef struct RobotCmdData
             float yaw;
             float leg_lenth;
         } __packed__ chassis;
+        uint8_t motor_torque_enable;  // 非 0 时使用 motor_torque 直接控制电机
+        uint8_t reserved[3];
+        float motor_torque[7];  // N*m [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
     } __packed__ data;
     uint16_t checksum;
 } __packed__ ReceiveDataRobotCmd_s;

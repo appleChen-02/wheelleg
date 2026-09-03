@@ -39,6 +39,7 @@
 #include "stdbool.h"
 #include "stdio.h"
 #include "string.h"
+#include "supervisory_computer_cmd.h"
 #include "usb_debug.h"
 #include "user_lib.h"
 
@@ -513,6 +514,7 @@ static void UpdateMotorStatus(void)
     for (uint8_t i = 0; i < 4; i++) {
         GetMotorMeasure(&CHASSIS.joint_motor[i]);
         CHASSIS.fdb.motor_pos[i] = CHASSIS.joint_motor[i].fdb.pos;
+        CHASSIS.fdb.motor_torque[i] = CHASSIS.joint_motor[i].fdb.tor;
         if (CHASSIS.joint_motor[i].offline) {
             g_motor_offline_mask |= (1 << i);
         }
@@ -521,6 +523,7 @@ static void UpdateMotorStatus(void)
     for (uint8_t i = 0; i < 2; i++) {
         GetMotorMeasure(&CHASSIS.wheel_motor[i]);
         CHASSIS.fdb.motor_pos[4 + i] = CHASSIS.wheel_motor[i].fdb.pos;
+        CHASSIS.fdb.motor_torque[4 + i] = CHASSIS.wheel_motor[i].fdb.tor;
         if (CHASSIS.wheel_motor[i].offline) {
             g_motor_offline_mask |= (1 << (4 + i));
         }
@@ -528,6 +531,7 @@ static void UpdateMotorStatus(void)
 
     GetMotorMeasure(&CHASSIS.tail_motor);
     CHASSIS.fdb.motor_pos[6] = CHASSIS.tail_motor.fdb.pos;
+    CHASSIS.fdb.motor_torque[6] = CHASSIS.tail_motor.fdb.tor;
     if (CHASSIS.tail_motor.offline) {
         g_motor_offline_mask |= (1 << 6);
     }
@@ -2550,9 +2554,15 @@ static void SendJointMotorCmd(void)
         case CHASSIS_NOTAIL:
         case CHASSIS_BIPEDAL:
         case CHASSIS_TRIPOD: {
-            LkMultipleTorqueControl_MG6012(
-                JOINT_CAN, CHASSIS.joint_motor[0].set.tor, CHASSIS.joint_motor[1].set.tor,
-                CHASSIS.joint_motor[2].set.tor, CHASSIS.joint_motor[3].set.tor);
+            if (GetScCmdMotorTorqueEnable()) {
+                LkMultipleTorqueControl_MG6012(
+                    JOINT_CAN, GetScCmdMotorTorque(0), GetScCmdMotorTorque(1),
+                    GetScCmdMotorTorque(2), GetScCmdMotorTorque(3));
+            } else {
+                LkMultipleTorqueControl_MG6012(
+                    JOINT_CAN, CHASSIS.joint_motor[0].set.tor, CHASSIS.joint_motor[1].set.tor,
+                    CHASSIS.joint_motor[2].set.tor, CHASSIS.joint_motor[3].set.tor);
+            }
 
             // LkMultipleTorqueControl_MG6012(JOINT_CAN, 0.0f, 0.0f, 0.0f, 0.0f);
         } break;
@@ -2580,11 +2590,17 @@ static void SendWheelMotorCmd(void)
         case CHASSIS_NOTAIL:
         case CHASSIS_BIPEDAL:
         case CHASSIS_TRIPOD: {
-            if (CHASSIS.tail_motor.set.tor > 7.0f) CHASSIS.tail_motor.set.tor = 7.0f;
-            if (CHASSIS.tail_motor.set.tor < -7.0f) CHASSIS.tail_motor.set.tor = -7.0f;
-            LkMultipleTorqueControl_MF9025_MG5010(
-                WHEEL_CAN, CHASSIS.wheel_motor[0].set.tor, CHASSIS.wheel_motor[1].set.tor,
-                CHASSIS.tail_motor.set.tor, 0);
+            if (GetScCmdMotorTorqueEnable()) {
+                LkMultipleTorqueControl_MF9025_MG5010(
+                    WHEEL_CAN, GetScCmdMotorTorque(4), GetScCmdMotorTorque(5),
+                    GetScCmdMotorTorque(6), 0);
+            } else {
+                if (CHASSIS.tail_motor.set.tor > 7.0f) CHASSIS.tail_motor.set.tor = 7.0f;
+                if (CHASSIS.tail_motor.set.tor < -7.0f) CHASSIS.tail_motor.set.tor = -7.0f;
+                LkMultipleTorqueControl_MF9025_MG5010(
+                    WHEEL_CAN, CHASSIS.wheel_motor[0].set.tor, CHASSIS.wheel_motor[1].set.tor,
+                    CHASSIS.tail_motor.set.tor, 0);
+            }
 
             // LkMultipleTorqueControl_MF9025_MG5010(WHEEL_CAN, 0.0f, 0.0f, 3.0f, 0.0f);
             // printf("yaw = %.3f\r\n", CHASSIS.fdb.body.yaw);

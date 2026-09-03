@@ -27,6 +27,8 @@ extern inline float GetScCmdChassisSpeed(uint8_t axis);
 extern inline float GetScCmdChassisVelocity(uint8_t axis);
 extern inline float GetScCmdChassisAngle(uint8_t axis);
 extern inline float GetScCmdChassisHeight(void);
+extern bool GetScCmdMotorTorqueEnable(void);
+extern float GetScCmdMotorTorque(uint8_t motor_index);
 extern inline bool GetScCmdFire(void);
 extern inline bool GetScCmdFricOn(void);
 extern inline float GetVirtualRcCh(uint8_t channel);

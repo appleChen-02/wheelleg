@@ -35,6 +35,9 @@ typedef struct
         bool fric_on;
     } shoot;
 
+    bool motor_torque_enable;
+    float motor_torque[7];  // N*m [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
+
 } RobotCmdData_t;
 
 #endif  // __CUSTOM_TYPEDEF_H

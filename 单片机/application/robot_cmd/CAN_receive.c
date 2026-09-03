@@ -60,8 +60,9 @@ void LkFdbData(LkMeasure_s * lk_measure, uint8_t * rx_data)
 {
     lk_measure->ctrl_id = rx_data[0];
     lk_measure->temprature = rx_data[1];
-    lk_measure->iq = (uint16_t)(rx_data[3] << 8 | rx_data[2]);
-    lk_measure->speed = (uint16_t)(rx_data[5] << 8 | rx_data[4]);
+    // 转矩电流和转速均采用 int16_t 二补码表示，必须保留负值
+    lk_measure->iq = (int16_t)(((uint16_t)rx_data[3] << 8) | rx_data[2]);
+    lk_measure->speed = (int16_t)(((uint16_t)rx_data[5] << 8) | rx_data[4]);
     lk_measure->encoder = (uint16_t)(rx_data[7] << 8 | rx_data[6]);
 
     lk_measure->last_fdb_time = HAL_GetTick();

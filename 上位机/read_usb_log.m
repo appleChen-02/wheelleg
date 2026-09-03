@@ -12,6 +12,7 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 %   - robot_motion.csv
 %   - robot_target.csv
 %   - torque.csv
+%   - motor_data.csv
 %   - unknown_frames.csv
 %   - usb_log.mat (optional, if exported)
 %
@@ -49,7 +50,7 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
     motionFile = fullfile(logDir, 'robot_motion.csv');
     targetFile = fullfile(logDir, 'robot_target.csv');
     torqueFile = fullfile(logDir, 'torque.csv');
-    motorAngleFile = fullfile(logDir, 'motor_angle.csv');
+    motorDataFile = fullfile(logDir, 'motor_data.csv');
     motorErrorFile = fullfile(logDir, 'motor_error.csv');
     unknownFile = fullfile(logDir, 'unknown_frames.csv');
     matFile = fullfile(logDir, 'usb_log.mat');
@@ -78,10 +79,10 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
         log.torque = table();
     end
 
-    if isfile(motorAngleFile)
-        log.motor_angle = readtable(motorAngleFile, 'VariableNamingRule', 'preserve');
+    if isfile(motorDataFile)
+        log.motor_data = readtable(motorDataFile, 'VariableNamingRule', 'preserve');
     else
-        log.motor_angle = table();
+        log.motor_data = table();
     end
 
     if isfile(motorErrorFile)
@@ -129,6 +130,9 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 
     % 电机角度：J0~J3髋关节 + W0~W1轮子 + Tail尾巴 七图同窗
     plot_motor_angles_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
+
+    % 电机实际力矩：J0~J3髋关节 + W0~W1轮子 + Tail尾巴 七图同窗
+    plot_motor_actual_torques_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition);
 
     % 先按时间播放实际运动轨迹（默认 1x），播放结束后再显示静态轨迹图
     %animate_actual_trajectory(log, playbackSpeed, axisLabelFontSize, tickFontSize);
@@ -361,17 +365,17 @@ function plot_torque_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount
 end
 
 function plot_motor_angles_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
-    if ~isfield(log, 'motor_angle') || isempty(log.motor_angle)
+    if ~isfield(log, 'motor_data') || isempty(log.motor_data)
         return;
     end
 
     requiredVars = {'host_time_s', 'J0_pos', 'J1_pos', 'J2_pos', 'J3_pos', ...
                     'W0_pos', 'W1_pos', 'Tail_pos'};
-    if ~all(ismember(requiredVars, log.motor_angle.Properties.VariableNames))
+    if ~all(ismember(requiredVars, log.motor_data.Properties.VariableNames))
         return;
     end
 
-    tAngle = double(log.motor_angle.host_time_s(:));
+    tAngle = double(log.motor_data.host_time_s(:));
     t0 = first_finite_time(tAngle);
     if ~isfinite(t0)
         t0 = 0;
@@ -391,7 +395,7 @@ function plot_motor_angles_vs_time(log, axisLabelFontSize, tickFontSize, baseTic
 
     for i = 1:7
         ax = nexttile;
-        plot(tAngle, log.motor_angle.(angleFields{i}), ...
+        plot(tAngle, log.motor_data.(angleFields{i}), ...
              'Color', lineColors(i,:), 'LineWidth', 1.0);
         grid on;
         style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true);
@@ -413,6 +417,46 @@ function plot_motor_angles_vs_time(log, axisLabelFontSize, tickFontSize, baseTic
                 xline(ax, tErr(k), 'r-', 'LineWidth', 0.3, 'Alpha', 0.3);
             end
             ylim(ax, yl);
+        end
+    end
+end
+
+function plot_motor_actual_torques_vs_time(log, axisLabelFontSize, tickFontSize, baseTickCount, figurePosition)
+    if ~isfield(log, 'motor_data') || isempty(log.motor_data)
+        return;
+    end
+
+    torqueFields = {'J0_actual_torque', 'J1_actual_torque', 'J2_actual_torque', 'J3_actual_torque', ...
+                    'W0_actual_torque', 'W1_actual_torque', 'Tail_actual_torque'};
+    requiredVars = [{'host_time_s'}, torqueFields];
+    if ~all(ismember(requiredVars, log.motor_data.Properties.VariableNames))
+        return;
+    end
+
+    tTorque = double(log.motor_data.host_time_s(:));
+    t0 = first_finite_time(tTorque);
+    if ~isfinite(t0)
+        t0 = 0;
+    end
+    tTorque = tTorque - t0;
+
+    f = create_plot_figure('Motor Actual Torques (J0-J3 / W0-W1 / Tail)', figurePosition, baseTickCount);
+    tlo = tiledlayout(f, 7, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+    title(tlo, 'Motor Feedback Torques (iq-derived, motor side)');
+
+    torqueLabels = {'J0 (left front hip)', 'J1 (left rear hip)', ...
+                    'J2 (right front hip)', 'J3 (right rear hip)', ...
+                    'W0 (left wheel)', 'W1 (right wheel)', 'Tail'};
+    lineColors = lines(7);
+    for i = 1:7
+        ax = nexttile;
+        plot(tTorque, log.motor_data.(torqueFields{i}), ...
+             'Color', lineColors(i,:), 'LineWidth', 1.0);
+        grid on;
+        style_plot_axes(ax, axisLabelFontSize, tickFontSize, baseTickCount, true);
+        ylabel(sprintf('%s (N*m)', torqueLabels{i}), 'FontSize', axisLabelFontSize);
+        if i == 7
+            xlabel('time (s, t0 = 0)', 'FontSize', axisLabelFontSize);
         end
     end
 end
@@ -706,7 +750,7 @@ end
 
 function timeOrigin = get_log_time_origin(log)
     timeOrigin = NaN;
-    candidateFields = {'robot_motion', 'robot_target', 'imu', 'torque', 'motor_angle', 'motor_error', 'unknown_frames'};
+    candidateFields = {'robot_motion', 'robot_target', 'imu', 'torque', 'motor_data', 'motor_error', 'unknown_frames'};
     for idx = 1:numel(candidateFields)
         fieldName = candidateFields{idx};
         if isfield(log, fieldName)
@@ -730,7 +774,7 @@ function timeOrigin = get_log_time_origin(log)
 end
 
 function log = apply_time_range_filter(log, timeRange, timeOrigin)
-    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'motor_angle', 'motor_error', 'unknown_frames'};
+    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'motor_data', 'motor_error', 'unknown_frames'};
     for idx = 1:numel(filterFields)
         fieldName = filterFields{idx};
         if ~isfield(log, fieldName)
