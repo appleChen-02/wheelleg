@@ -130,6 +130,13 @@ int32_t counter_beta = 0;
 int32_t counter_beta_tripod = 0;
 ChassisMode_e last_mode = CHASSIS_TRIPOD;
 
+static PrbsGenerator_t SYS_ID_PRBS_GENERATORS[5];
+static uint32_t SYS_ID_EXCITATION_SAMPLE = 0U;
+static bool SYS_ID_EXCITATION_ACTIVE = false;
+
+static void SystemIdentificationResetExcitation(void);
+static void SystemIdentificationApplyExcitation(float input[5]);
+
 /*-------------------- Publish --------------------*/
 
 void ChassisPublish(void)
@@ -509,6 +516,12 @@ void ChassisSetMode(void)
     }
 
     CHASSIS.mode = new_mode;
+    if (new_mode == CHASSIS_SYSTEM_IDENTIFICATION) {
+        SystemIdentificationResetExcitation();
+    } else {
+        SYS_ID_EXCITATION_ACTIVE = false;
+        SYS_ID_EXCITATION_SAMPLE = 0U;
+    }
     ResetXStateOnModeSwitch();
     last_mode = new_mode;
 }
@@ -1495,6 +1508,64 @@ static void ConsoleBipedal(void);
 static void ConsoleTripod(void);
 static void ConsoleStandUp(void);
 
+static void SystemIdentificationResetExcitation(void)
+{
+    static const uint16_t seeds[5] = {
+        SYS_ID_PRBS_SEED_RIGHT_HIP,
+        SYS_ID_PRBS_SEED_LEFT_HIP,
+        SYS_ID_PRBS_SEED_RIGHT_WHEEL,
+        SYS_ID_PRBS_SEED_LEFT_WHEEL,
+        SYS_ID_PRBS_SEED_TAIL,
+    };
+
+    for (uint8_t i = 0; i < 5U; ++i) {
+        PrbsGeneratorInit(&SYS_ID_PRBS_GENERATORS[i], seeds[i]);
+    }
+    SYS_ID_EXCITATION_SAMPLE = 0U;
+    SYS_ID_EXCITATION_ACTIVE = true;
+}
+
+static void SystemIdentificationApplyExcitation(float input[5])
+{
+    if ((input == NULL) || !SYS_ID_EXCITATION_ACTIVE ||
+        (SYS_ID_EXCITATION_ENABLE == 0U) ||
+        (SYS_ID_EXCITATION_MODE == SYS_ID_EXCITATION_DISABLED)) {
+        return;
+    }
+
+    static const float amplitudes[5] = {
+        SYS_ID_EXCITATION_AMP_RIGHT_HIP,
+        SYS_ID_EXCITATION_AMP_LEFT_HIP,
+        SYS_ID_EXCITATION_AMP_RIGHT_WHEEL,
+        SYS_ID_EXCITATION_AMP_LEFT_WHEEL,
+        SYS_ID_EXCITATION_AMP_TAIL,
+    };
+    const float elapsed_time = SYS_ID_EXCITATION_SAMPLE * CHASSIS_CONTROL_TIME_S;
+    const uint8_t channel_mask = SYS_ID_EXCITATION_CHANNEL_MASK;
+
+    for (uint8_t i = 0; i < 5U; ++i) {
+        if (((channel_mask >> i) & 0x01U) == 0U) continue;
+
+        float excitation = 0.0f;
+        if (SYS_ID_EXCITATION_MODE == SYS_ID_EXCITATION_SINE_SWEEP) {
+            if (elapsed_time <= SYS_ID_SINE_SWEEP_DURATION) {
+                excitation = GenerateSinSweepWave(
+                    amplitudes[i], 0.0f, SYS_ID_SINE_SWEEP_START_FREQ,
+                    SYS_ID_SINE_SWEEP_END_FREQ, SYS_ID_SINE_SWEEP_DURATION, elapsed_time);
+            }
+        } else if (SYS_ID_EXCITATION_MODE == SYS_ID_EXCITATION_PRBS) {
+            excitation = GeneratePrbsWave(
+                &SYS_ID_PRBS_GENERATORS[i], amplitudes[i], 0.0f,
+                SYS_ID_PRBS_BIT_HOLD_SAMPLES);
+        }
+        input[i] += excitation;
+    }
+
+    if (SYS_ID_EXCITATION_SAMPLE < UINT32_MAX) {
+        ++SYS_ID_EXCITATION_SAMPLE;
+    }
+}
+
 
 
 
@@ -2186,6 +2257,11 @@ static void LocomotionController_Pro_Bipedal(void)
     x[10] = X10_OFFSET + (CHASSIS.fdb.tail_state.beta - CHASSIS.ref.tail_state.beta);
     x[11] = X11_OFFSET + (CHASSIS.fdb.tail_state.beta_dot - CHASSIS.ref.tail_state.beta_dot);
     CalcLQR_Pro_Tail(k, x, Tp_T_Tt);
+
+    // 系统辨识激励叠加在LQR广义力矩之后，随后再进行VMC映射和电机限幅。
+    if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
+        SystemIdentificationApplyExcitation(Tp_T_Tt);
+    }
 
     CHASSIS.cmd.leg[0].rod.Tp = Tp_T_Tt[1] + T0_eq[0];
     CHASSIS.cmd.leg[1].rod.Tp = Tp_T_Tt[0] + T0_eq[0];

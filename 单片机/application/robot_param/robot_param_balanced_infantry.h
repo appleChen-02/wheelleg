@@ -47,27 +47,7 @@
 #define CHASSIS_HAND_CHANNEL   0  // 夹爪遥控器通道号码 (CH1 右平)
 #define CHASSIS_RC_DEADLINE    16 // 摇杆死区 (SBUS偏移单位, 16/800=2%)
 
-// 系统辨识工作点：只固定参考状态，LQR仍使用实际反馈误差进行稳定控制。
-// 后续激励信号应叠加在LQR输出之后；本阶段不启用激励。
-#define SYS_ID_LEG_LENGTH      (0.18f)  // (m)系统辨识默认腿长
-
-// 系统辨识模式的12维LQR状态目标量，单位与对应状态一致；默认工作点全部为0。
-// 腿角目标会在控制器中叠加模型计算得到的theta_eq几何偏置。
-#define SYS_ID_REF_BODY_X              (-0.5f)  // (m)
-#define SYS_ID_REF_BODY_X_DOT          (0.0f)  // (m/s)
-#define SYS_ID_REF_BODY_YAW            (0.0f)  // (rad)
-#define SYS_ID_REF_BODY_YAW_DOT        (0.0f)  // (rad/s)
-#define SYS_ID_REF_LEFT_LEG_THETA      (0.0f)  // (rad)
-#define SYS_ID_REF_LEFT_LEG_THETA_DOT  (0.0f)  // (rad/s)
-#define SYS_ID_REF_RIGHT_LEG_THETA     (0.0f)  // (rad)
-#define SYS_ID_REF_RIGHT_LEG_THETA_DOT (0.0f)  // (rad/s)
-#define SYS_ID_REF_BODY_PITCH          (0.0f)  // (rad)
-#define SYS_ID_REF_BODY_PITCH_DOT      (0.0f)  // (rad/s)
-#define SYS_ID_REF_TAIL_BETA           (0.0f)  // (rad)
-#define SYS_ID_REF_TAIL_BETA_DOT       (0.0f)  // (rad/s)
-
-// 非LQR状态的姿态目标，保留为独立参数，便于后续调整roll工作点。
-#define SYS_ID_REF_BODY_ROLL           (0.0f)  // (rad)
+#include "system_identification_param.h"
 
 // deadzone parameters ---------------------
 #define WHEEL_DEADZONE (0.01f)  // (m/s)轮子速度死区
