@@ -440,4 +440,4 @@
 //other parameters ---------------------
 
 // clang-format on
-#endif /* INCLUDED_ROBOT_PARAM_H */
+#endif // INCLUDED_ROBOT_PARAM_H
