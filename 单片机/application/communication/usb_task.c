@@ -87,12 +87,17 @@ static SendDataPidDebug_s   SEND_PID_DEBUG_DATA;
 static SendDataMotorError_s SEND_MOTOR_ERROR_DATA;
 static SendDataMotor_s      SEND_MOTOR_DATA;
 static SendDataRlState_s    SEND_RL_STATE_DATA;
+static SendDataSystemIdentification12_s SEND_SYS_ID_12_DATA;
+static SendDataSystemIdentification18_s SEND_SYS_ID_18_DATA;
+static SendDataSystemIdentificationReference_s SEND_SYS_ID_REFERENCE_DATA;
 
 // clang-format on
 
 // 文件级静态缓冲，避免在USB任务栈上分配大体积快照结构
 static Fdb_t USB_FDB_SNAPSHOT;
 static Ref_t USB_REF_SNAPSHOT;
+static float USB_SYS_ID_STATE_BUFFER[18];
+static float USB_SYS_ID_REFERENCE_BUFFER[18];
 
 // 数据接收结构体
 static ReceiveDataRobotCmd_s RECEIVE_ROBOT_CMD_DATA;
@@ -116,6 +121,8 @@ typedef struct
     uint32_t MotorData;
     uint32_t PidDebug;
     uint32_t RlState;
+    uint32_t SystemIdentification;
+    uint32_t SystemIdentificationReference;
 } LastSendTime_t;
 static LastSendTime_t LAST_SEND_TIME;
 
@@ -137,6 +144,13 @@ static void UsbSendPidDebugData(void);
 static void UsbSendMotorErrorData(void);
 static void UsbSendMotorData(void);
 static void UsbSendRlStateData(void);
+static void UsbSendSystemIdentificationData(void);
+static void UsbSendSystemIdentificationReferenceData(void);
+static void FillSystemIdentificationCommon(
+    SystemIdentificationFrameCommon_t * common, uint8_t state_dimension,
+    uint8_t input_dimension);
+static void FillSystemIdentificationState(float state[18]);
+static void FillSystemIdentificationReference(float reference[18]);
 
 /*******************************************************************************/
 /* Receive Function                                                            */
@@ -261,6 +275,27 @@ static void UsbInit(void)
     SEND_MOTOR_DATA.frame_header.id = MOTOR_DATA_SEND_ID;
     append_CRC8_check_sum(
         (uint8_t *)(&SEND_MOTOR_DATA.frame_header), sizeof(SEND_MOTOR_DATA.frame_header));
+
+    SEND_SYS_ID_12_DATA.common.frame_header.sof = SEND_SOF;
+    SEND_SYS_ID_12_DATA.common.frame_header.len =
+        (uint8_t)(sizeof(SendDataSystemIdentification12_s) - 6U);
+    SEND_SYS_ID_12_DATA.common.frame_header.id = SYSTEM_IDENTIFICATION_12_DATA_SEND_ID;
+    append_CRC8_check_sum(
+        (uint8_t *)&SEND_SYS_ID_12_DATA.common.frame_header, sizeof(FrameHeader_t));
+
+    SEND_SYS_ID_18_DATA.common.frame_header.sof = SEND_SOF;
+    SEND_SYS_ID_18_DATA.common.frame_header.len =
+        (uint8_t)(sizeof(SendDataSystemIdentification18_s) - 6U);
+    SEND_SYS_ID_18_DATA.common.frame_header.id = SYSTEM_IDENTIFICATION_18_DATA_SEND_ID;
+    append_CRC8_check_sum(
+        (uint8_t *)&SEND_SYS_ID_18_DATA.common.frame_header, sizeof(FrameHeader_t));
+
+    SEND_SYS_ID_REFERENCE_DATA.frame_header.sof = SEND_SOF;
+    SEND_SYS_ID_REFERENCE_DATA.frame_header.len =
+        (uint8_t)(sizeof(SendDataSystemIdentificationReference_s) - 6U);
+    SEND_SYS_ID_REFERENCE_DATA.frame_header.id = SYSTEM_IDENTIFICATION_REFERENCE_SEND_ID;
+    append_CRC8_check_sum(
+        (uint8_t *)&SEND_SYS_ID_REFERENCE_DATA.frame_header, sizeof(FrameHeader_t));
 }
 
 /**
@@ -270,6 +305,8 @@ static void UsbInit(void)
  */
 static void UsbSendData(void)
 {
+    static bool was_system_identification = false;
+
     // 存在电机离线时，只发送错误包，跳过其他所有数据
     if (g_motor_offline_mask != 0) {
         UsbSendMotorErrorData();
@@ -277,6 +314,47 @@ static void UsbSendData(void)
     }
 
     uint32_t now = HAL_GetTick();
+    const bool system_identification = ChassisIsSystemIdentificationMode();
+
+    if (system_identification) {
+        if (!was_system_identification) {
+            LAST_SEND_TIME.SystemIdentification = now - SYS_ID_SAMPLE_SEND_PERIOD_MS;
+            LAST_SEND_TIME.SystemIdentificationReference =
+                now - SYS_ID_REFERENCE_SEND_PERIOD_MS;
+        }
+        was_system_identification = true;
+
+        if (ChassisSnapshotRead(
+                &USB_FDB_SNAPSHOT, sizeof(Fdb_t), &USB_REF_SNAPSHOT, sizeof(Ref_t), NULL) !=
+            CHASSIS_SNAPSHOT_OK) {
+            return;
+        }
+        if ((USB_FDB_SNAPSHOT.sys_id_status_flags & SYS_ID_STATUS_MODE_VALID) == 0U) {
+            return;
+        }
+        if ((now - LAST_SEND_TIME.SystemIdentificationReference) >=
+            SYS_ID_REFERENCE_SEND_PERIOD_MS) {
+            LAST_SEND_TIME.SystemIdentificationReference = now;
+            UsbSendSystemIdentificationReferenceData();
+        }
+        if ((now - LAST_SEND_TIME.SystemIdentification) >= SYS_ID_SAMPLE_SEND_PERIOD_MS) {
+            LAST_SEND_TIME.SystemIdentification = now;
+            UsbSendSystemIdentificationData();
+        }
+        return;
+    }
+    if (was_system_identification) {
+        LAST_SEND_TIME.Imu = now;
+        LAST_SEND_TIME.RobotMotion = now;
+        LAST_SEND_TIME.RobotTarget = now;
+        LAST_SEND_TIME.Torque = now;
+        LAST_SEND_TIME.MotorData = now;
+        LAST_SEND_TIME.PidDebug = now;
+        LAST_SEND_TIME.RlState = now;
+        was_system_identification = false;
+        return;
+    }
+
     bool send_imu = ((now - LAST_SEND_TIME.Imu) >= SEND_DURATION_Imu);
     bool send_motion = ((now - LAST_SEND_TIME.RobotMotion) >= SEND_DURATION_RobotMotion);
     bool send_target = ((now - LAST_SEND_TIME.RobotTarget) >= SEND_DURATION_RobotTarget);
@@ -691,6 +769,143 @@ static void UsbSendRlStateData(void)
     SEND_RL_STATE_DATA.data.remote_height_mm = (uint16_t)(remote_height * 1000.0f + 0.5f);
     append_CRC16_check_sum((uint8_t *)&SEND_RL_STATE_DATA, sizeof(SendDataRlState_s));
     USB_Transmit((uint8_t *)&SEND_RL_STATE_DATA, sizeof(SendDataRlState_s));
+}
+
+static void FillSystemIdentificationCommon(
+    SystemIdentificationFrameCommon_t * common, uint8_t state_dimension,
+    uint8_t input_dimension)
+{
+    common->control_tick_ms = USB_FDB_SNAPSHOT.control_tick_ms;
+    common->sequence = USB_FDB_SNAPSHOT.control_sequence;
+    common->experiment_id = USB_FDB_SNAPSHOT.experiment_id;
+    common->reference_sequence = USB_FDB_SNAPSHOT.reference_sequence;
+    common->protocol_version = SYS_ID_PROTOCOL_VERSION;
+    common->profile_id = SYS_ID_OUTPUT_PROFILE;
+    common->state_dimension = state_dimension;
+    common->input_dimension = input_dimension;
+    common->excitation_config = USB_FDB_SNAPSHOT.sys_id_excitation_config;
+    common->excitation_input_mask = USB_FDB_SNAPSHOT.sys_id_excitation_input_mask;
+    common->status_flags = USB_FDB_SNAPSHOT.sys_id_status_flags;
+    common->motor_saturation_mask = USB_FDB_SNAPSHOT.sys_id_saturation_mask;
+}
+
+static void FillSystemIdentificationState(float state[18])
+{
+    state[0] = USB_FDB_SNAPSHOT.body.x;
+    state[1] = USB_FDB_SNAPSHOT.body.x_dot_obv;
+    state[2] = USB_FDB_SNAPSHOT.body.yaw;
+    state[3] = USB_FDB_SNAPSHOT.body.yaw_dot;
+    state[4] = USB_FDB_SNAPSHOT.leg_state[0].theta;
+    state[5] = USB_FDB_SNAPSHOT.leg_state[0].theta_dot;
+    state[6] = USB_FDB_SNAPSHOT.leg_state[1].theta;
+    state[7] = USB_FDB_SNAPSHOT.leg_state[1].theta_dot;
+    state[8] = USB_FDB_SNAPSHOT.body.pitch;
+    state[9] = USB_FDB_SNAPSHOT.body.pitch_dot;
+    state[10] = USB_FDB_SNAPSHOT.tail_state.beta;
+    state[11] = USB_FDB_SNAPSHOT.tail_state.beta_dot;
+    state[12] = USB_FDB_SNAPSHOT.body.roll;
+    state[13] = USB_FDB_SNAPSHOT.body.roll_dot;
+    state[14] = USB_FDB_SNAPSHOT.leg[0].rod.L0;
+    state[15] = USB_FDB_SNAPSHOT.leg[0].rod.dL0;
+    state[16] = USB_FDB_SNAPSHOT.leg[1].rod.L0;
+    state[17] = USB_FDB_SNAPSHOT.leg[1].rod.dL0;
+}
+
+static void FillSystemIdentificationReference(float reference[18])
+{
+    reference[0] = USB_REF_SNAPSHOT.body.x;
+    reference[1] = USB_REF_SNAPSHOT.speed_vector.vx;
+    reference[2] = USB_REF_SNAPSHOT.body.yaw;
+    reference[3] = USB_REF_SNAPSHOT.speed_vector.wz;
+    reference[4] = USB_REF_SNAPSHOT.rod_Angle[0];
+    reference[5] = USB_REF_SNAPSHOT.leg_state[0].theta_dot;
+    reference[6] = USB_REF_SNAPSHOT.rod_Angle[1];
+    reference[7] = USB_REF_SNAPSHOT.leg_state[1].theta_dot;
+    reference[8] = USB_REF_SNAPSHOT.body.pitch;
+    reference[9] = USB_REF_SNAPSHOT.body.pitch_dot;
+    reference[10] = USB_REF_SNAPSHOT.tail_state.beta;
+    reference[11] = USB_REF_SNAPSHOT.tail_state.beta_dot;
+    reference[12] = USB_REF_SNAPSHOT.body.roll;
+    reference[13] = USB_REF_SNAPSHOT.body.roll_dot;
+    reference[14] = USB_REF_SNAPSHOT.rod_L0[0];
+    reference[15] = USB_REF_SNAPSHOT.rod_dL0[0];
+    reference[16] = USB_REF_SNAPSHOT.rod_L0[1];
+    reference[17] = USB_REF_SNAPSHOT.rod_dL0[1];
+}
+
+static void UsbSendSystemIdentificationData(void)
+{
+#if SYS_ID_OUTPUT_PROFILE == SYS_ID_PROFILE_12_STATE_5_INPUT
+    FillSystemIdentificationCommon(&SEND_SYS_ID_12_DATA.common, 12U, 5U);
+    FillSystemIdentificationState(USB_SYS_ID_STATE_BUFFER);
+    memcpy(
+        (void *)SEND_SYS_ID_12_DATA.state_feedback, USB_SYS_ID_STATE_BUFFER,
+        sizeof(SEND_SYS_ID_12_DATA.state_feedback));
+    for (uint8_t i = 0; i < 5U; ++i) {
+        SEND_SYS_ID_12_DATA.controller_output[i] = USB_FDB_SNAPSHOT.lqr_output[i];
+        SEND_SYS_ID_12_DATA.excitation[i] = USB_FDB_SNAPSHOT.excitation[i];
+        SEND_SYS_ID_12_DATA.generalized_command[i] = USB_FDB_SNAPSHOT.generalized_command[i];
+        SEND_SYS_ID_12_DATA.generalized_actual_torque[i] =
+            USB_FDB_SNAPSHOT.generalized_actual_torque[i];
+    }
+    memcpy(
+        (void *)SEND_SYS_ID_12_DATA.motor_feedback_torque, USB_FDB_SNAPSHOT.motor_torque,
+        sizeof(SEND_SYS_ID_12_DATA.motor_feedback_torque));
+    append_CRC16_check_sum(
+        (uint8_t *)&SEND_SYS_ID_12_DATA, sizeof(SendDataSystemIdentification12_s));
+    USB_Transmit(
+        (uint8_t *)&SEND_SYS_ID_12_DATA, sizeof(SendDataSystemIdentification12_s));
+#else
+    FillSystemIdentificationCommon(&SEND_SYS_ID_18_DATA.common, 18U, 7U);
+    FillSystemIdentificationState(SEND_SYS_ID_18_DATA.state_feedback);
+    for (uint8_t i = 0; i < 7U; ++i) {
+        SEND_SYS_ID_18_DATA.controller_output[i] = USB_FDB_SNAPSHOT.lqr_output[i];
+        SEND_SYS_ID_18_DATA.excitation[i] = USB_FDB_SNAPSHOT.excitation[i];
+        SEND_SYS_ID_18_DATA.generalized_command[i] = USB_FDB_SNAPSHOT.generalized_command[i];
+        SEND_SYS_ID_18_DATA.generalized_actual_torque[i] =
+            USB_FDB_SNAPSHOT.generalized_actual_torque[i];
+        SEND_SYS_ID_18_DATA.motor_feedback_torque[i] = USB_FDB_SNAPSHOT.motor_torque[i];
+    }
+    append_CRC16_check_sum(
+        (uint8_t *)&SEND_SYS_ID_18_DATA, sizeof(SendDataSystemIdentification18_s));
+    USB_Transmit(
+        (uint8_t *)&SEND_SYS_ID_18_DATA, sizeof(SendDataSystemIdentification18_s));
+#endif
+}
+
+static void UsbSendSystemIdentificationReferenceData(void)
+{
+    SEND_SYS_ID_REFERENCE_DATA.experiment_id = USB_FDB_SNAPSHOT.experiment_id;
+    SEND_SYS_ID_REFERENCE_DATA.reference_sequence = USB_FDB_SNAPSHOT.reference_sequence;
+    SEND_SYS_ID_REFERENCE_DATA.protocol_version = SYS_ID_PROTOCOL_VERSION;
+    SEND_SYS_ID_REFERENCE_DATA.profile_id = SYS_ID_OUTPUT_PROFILE;
+#if SYS_ID_OUTPUT_PROFILE == SYS_ID_PROFILE_12_STATE_5_INPUT
+    SEND_SYS_ID_REFERENCE_DATA.state_dimension = 12U;
+    SEND_SYS_ID_REFERENCE_DATA.input_dimension = 5U;
+#else
+    SEND_SYS_ID_REFERENCE_DATA.state_dimension = 18U;
+    SEND_SYS_ID_REFERENCE_DATA.input_dimension = 7U;
+#endif
+    SEND_SYS_ID_REFERENCE_DATA.excitation_config =
+        USB_FDB_SNAPSHOT.sys_id_excitation_config;
+    SEND_SYS_ID_REFERENCE_DATA.excitation_input_mask =
+        USB_FDB_SNAPSHOT.sys_id_excitation_input_mask;
+    SEND_SYS_ID_REFERENCE_DATA.reserved[0] = 0U;
+    SEND_SYS_ID_REFERENCE_DATA.reserved[1] = 0U;
+    FillSystemIdentificationReference(USB_SYS_ID_REFERENCE_BUFFER);
+    memcpy(
+        (void *)SEND_SYS_ID_REFERENCE_DATA.state_reference, USB_SYS_ID_REFERENCE_BUFFER,
+        sizeof(SEND_SYS_ID_REFERENCE_DATA.state_reference));
+    memcpy(
+        (void *)SEND_SYS_ID_REFERENCE_DATA.equilibrium_input,
+        USB_FDB_SNAPSHOT.equilibrium_input,
+        sizeof(SEND_SYS_ID_REFERENCE_DATA.equilibrium_input));
+    append_CRC16_check_sum(
+        (uint8_t *)&SEND_SYS_ID_REFERENCE_DATA,
+        sizeof(SendDataSystemIdentificationReference_s));
+    USB_Transmit(
+        (uint8_t *)&SEND_SYS_ID_REFERENCE_DATA,
+        sizeof(SendDataSystemIdentificationReference_s));
 }
 
 static void GetVirtualRcCtrlData(void)

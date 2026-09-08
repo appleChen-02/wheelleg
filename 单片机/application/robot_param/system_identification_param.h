@@ -16,6 +16,25 @@
 #ifndef SYSTEM_IDENTIFICATION_PARAM_H
 #define SYSTEM_IDENTIFICATION_PARAM_H
 
+/*-------------------- USB output profile --------------------*/
+#define SYS_ID_PROFILE_12_STATE_5_INPUT  (1U)
+#define SYS_ID_PROFILE_18_STATE_7_INPUT  (2U)
+
+// 选择系统辨识高速采样帧布局。修改后需要重新编译下载。
+// 12状态profile发送0x10帧，输入为5维广义力矩；18状态profile发送0x11帧，
+// 输入在前5维力矩后追加左、右腿轴向力。两种profile共用0x12参考配置帧。
+// 当前实际控制器仍为12状态LQR；18状态profile用于协议和数据采集预留。
+#define SYS_ID_OUTPUT_PROFILE             SYS_ID_PROFILE_12_STATE_5_INPUT
+
+#if (SYS_ID_OUTPUT_PROFILE != SYS_ID_PROFILE_12_STATE_5_INPUT) && \
+    (SYS_ID_OUTPUT_PROFILE != SYS_ID_PROFILE_18_STATE_7_INPUT)
+#error "Invalid SYS_ID_OUTPUT_PROFILE"
+#endif
+
+#define SYS_ID_SAMPLE_SEND_PERIOD_MS     (4U)     // 高速采样帧发送周期，250Hz
+#define SYS_ID_REFERENCE_SEND_PERIOD_MS  (1000U)  // 参考配置帧周期，1Hz
+#define SYS_ID_JACOBIAN_DET_MIN          (1.0e-6f) // 小于该值时不反算腿部广义力
+
 /*-------------------- Fixed operating point --------------------*/
 // 固定腿长同时用于左右腿参考值，以及系统辨识模式下K、theta_eq和T0的插值工作点。
 // 必须保持在机器人允许的 MIN_LEG_LENGTH ~ MAX_LEG_LENGTH 范围内。
@@ -42,6 +61,13 @@
 
 // roll不属于上述12维LQR状态，但会进入左右腿长协调控制，因此单独配置。
 #define SYS_ID_REF_BODY_ROLL            (0.0f)   // 机体横滚角目标，rad
+#define SYS_ID_REF_BODY_ROLL_DOT        (0.0f)   // 机体横滚角速度目标，rad/s
+
+// 18状态profile追加的左右腿长参考；默认都引用12状态控制器的统一腿长。
+#define SYS_ID_REF_LEFT_LEG_LENGTH       SYS_ID_LEG_LENGTH // 左腿虚拟杆长目标，m
+#define SYS_ID_REF_LEFT_LEG_LENGTH_DOT   (0.0f)             // 左腿长速度目标，m/s
+#define SYS_ID_REF_RIGHT_LEG_LENGTH      SYS_ID_LEG_LENGTH // 右腿虚拟杆长目标，m
+#define SYS_ID_REF_RIGHT_LEG_LENGTH_DOT  (0.0f)             // 右腿长速度目标，m/s
 
 /*-------------------- Excitation selection --------------------*/
 #define SYS_ID_EXCITATION_DISABLED      0U  // 不生成激励
@@ -55,12 +81,13 @@
 // 激励类型只能选择上面三个常量之一。DISABLED与将ENABLE设为0的效果相同。
 #define SYS_ID_EXCITATION_MODE          SYS_ID_EXCITATION_SINE_SWEEP
 
-// 五位通道掩码，置1的通道施加激励，置0的通道保持纯LQR输出：
-// bit0=右髋Tp，bit1=左髋Tp，bit2=右轮T，bit3=左轮T，bit4=尾巴Tt。
+// 七位输入掩码，置1的通道施加激励，置0的通道保持纯控制器输出：
+// bit0=右髋Tp，bit1=左髋Tp，bit2=右轮T，bit3=左轮T，bit4=尾巴Tt，
+// bit5=左腿轴向力F，bit6=右腿轴向力F。
 // 常用示例：0x01=仅右髋，0x02=仅左髋，0x04=仅右轮，0x08=仅左轮，
-//           0x10=仅尾巴，0x0C=双轮，0x03=双髋，0x1F=五通道同时激励。
-// 五通道顺序与LQR输出数组 [右髋, 左髋, 右轮, 左轮, 尾巴] 完全一致。
-#define SYS_ID_EXCITATION_CHANNEL_MASK  0x1FU
+//           0x10=仅尾巴，0x20=仅左腿轴向力，0x40=仅右腿轴向力，
+//           0x0C=双轮，0x03=双髋，0x60=双腿轴向力，0x1F=原五通道同时激励。
+#define SYS_ID_EXCITATION_INPUT_MASK    0x1FU
 
 /*-------------------- Sine sweep --------------------*/
 // 当前实现是线性chirp：瞬时频率在DURATION内从START_FREQ线性变化到END_FREQ。
@@ -86,6 +113,8 @@
 #define SYS_ID_PRBS_SEED_RIGHT_WHEEL   (0xBEEFU) // 右轮PRBS种子
 #define SYS_ID_PRBS_SEED_LEFT_WHEEL    (0x5A5AU) // 左轮PRBS种子
 #define SYS_ID_PRBS_SEED_TAIL          (0x1357U) // 尾巴PRBS种子
+#define SYS_ID_PRBS_SEED_LEFT_LEG_FORCE  (0x2468U) // 左腿轴向力PRBS种子
+#define SYS_ID_PRBS_SEED_RIGHT_LEG_FORCE (0x369CU) // 右腿轴向力PRBS种子
 
 /*-------------------- Per-channel amplitude --------------------*/
 // 每个数值都是峰值而非峰峰值，单位N*m；PRBS输出为+/-该值，正弦范围也为+/-该值。
@@ -97,5 +126,7 @@
 #define SYS_ID_EXCITATION_AMP_RIGHT_WHEEL (0.1f) // 右轮力矩激励峰值，N*m
 #define SYS_ID_EXCITATION_AMP_LEFT_WHEEL  (0.1f) // 左轮力矩激励峰值，N*m
 #define SYS_ID_EXCITATION_AMP_TAIL        (0.1f) // 尾巴力矩激励峰值，N*m
+#define SYS_ID_EXCITATION_AMP_LEFT_LEG_FORCE  (2.0f) // 左腿轴向力激励峰值，N
+#define SYS_ID_EXCITATION_AMP_RIGHT_LEG_FORCE (2.0f) // 右腿轴向力激励峰值，N
 
 #endif  // SYSTEM_IDENTIFICATION_PARAM_H

@@ -130,12 +130,16 @@ int32_t counter_beta = 0;
 int32_t counter_beta_tripod = 0;
 ChassisMode_e last_mode = CHASSIS_TRIPOD;
 
-static PrbsGenerator_t SYS_ID_PRBS_GENERATORS[5];
+static PrbsGenerator_t SYS_ID_PRBS_GENERATORS[7];
 static uint32_t SYS_ID_EXCITATION_SAMPLE = 0U;
 static bool SYS_ID_EXCITATION_ACTIVE = false;
+static uint32_t SYS_ID_CONTROL_SEQUENCE = 0U;
+static uint32_t SYS_ID_EXPERIMENT_ID = 0U;
+static uint32_t SYS_ID_REFERENCE_SEQUENCE = 0U;
 
 static void SystemIdentificationResetExcitation(void);
 static void SystemIdentificationApplyExcitation(float input[5]);
+static void SystemIdentificationFinalizeSnapshot(void);
 
 /*-------------------- Publish --------------------*/
 
@@ -1335,6 +1339,7 @@ void ChassisReference(void)
 
     if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
         CHASSIS.ref.body.roll = SYS_ID_REF_BODY_ROLL;
+        CHASSIS.ref.body.roll_dot = SYS_ID_REF_BODY_ROLL_DOT;
         CHASSIS.ref.body.pitch = SYS_ID_REF_BODY_PITCH;
     } else {
         CHASSIS.ref.body.roll = fp32_constrain(-rc_roll * RC_TO_ONE * MAX_ROLL, MIN_ROLL, MAX_ROLL);
@@ -1428,10 +1433,14 @@ void ChassisReference(void)
     angle = fp32_constrain(angle, MIN_LEG_ANGLE, MAX_LEG_ANGLE);
     tail_angle = fp32_constrain(tail_angle, MIN_TAIL_ANGLE, M_PI_2);
 
-    CHASSIS.ref.rod_L0[0] = length;
-    CHASSIS.ref.rod_L0[1] = length;
-    CHASSIS.ref.rod_dL0[0] = 0.0f;
-    CHASSIS.ref.rod_dL0[1] = 0.0f;
+    CHASSIS.ref.rod_L0[0] = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                                SYS_ID_REF_LEFT_LEG_LENGTH : length;
+    CHASSIS.ref.rod_L0[1] = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                                SYS_ID_REF_RIGHT_LEG_LENGTH : length;
+    CHASSIS.ref.rod_dL0[0] = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                                 SYS_ID_REF_LEFT_LEG_LENGTH_DOT : 0.0f;
+    CHASSIS.ref.rod_dL0[1] = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
+                                 SYS_ID_REF_RIGHT_LEG_LENGTH_DOT : 0.0f;
     CHASSIS.ref.rod_Angle[0] = angle;
     CHASSIS.ref.rod_Angle[1] = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
                                    SYS_ID_REF_RIGHT_LEG_THETA : angle;
@@ -1449,7 +1458,11 @@ void ChassisReference(void)
         CHASSIS.ref.leg_state[i].phi_dot   = 0.0f;
     }
     // 一阶低通后的尾巴摆角期望
-    CHASSIS.ref.tail_state.beta += TAIL_BETA_ALPHA * (tail_angle - CHASSIS.ref.tail_state.beta);
+    if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
+        CHASSIS.ref.tail_state.beta = tail_angle;
+    } else {
+        CHASSIS.ref.tail_state.beta += TAIL_BETA_ALPHA * (tail_angle - CHASSIS.ref.tail_state.beta);
+    }
     CHASSIS.ref.tail_state.beta_dot =
         (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ? SYS_ID_REF_TAIL_BETA_DOT : 0.0f;
     // clang-format on
@@ -1510,40 +1523,60 @@ static void ConsoleStandUp(void);
 
 static void SystemIdentificationResetExcitation(void)
 {
-    static const uint16_t seeds[5] = {
+    static const uint16_t seeds[7] = {
         SYS_ID_PRBS_SEED_RIGHT_HIP,
         SYS_ID_PRBS_SEED_LEFT_HIP,
         SYS_ID_PRBS_SEED_RIGHT_WHEEL,
         SYS_ID_PRBS_SEED_LEFT_WHEEL,
         SYS_ID_PRBS_SEED_TAIL,
+        SYS_ID_PRBS_SEED_LEFT_LEG_FORCE,
+        SYS_ID_PRBS_SEED_RIGHT_LEG_FORCE,
     };
 
-    for (uint8_t i = 0; i < 5U; ++i) {
+    for (uint8_t i = 0; i < 7U; ++i) {
         PrbsGeneratorInit(&SYS_ID_PRBS_GENERATORS[i], seeds[i]);
     }
     SYS_ID_EXCITATION_SAMPLE = 0U;
     SYS_ID_EXCITATION_ACTIVE = true;
+    ++SYS_ID_EXPERIMENT_ID;
+    ++SYS_ID_REFERENCE_SEQUENCE;
+}
+
+bool ChassisIsSystemIdentificationMode(void)
+{
+    return CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION;
 }
 
 static void SystemIdentificationApplyExcitation(float input[5])
 {
+    for (uint8_t i = 0; i < 7U; ++i) {
+        CHASSIS.fdb.excitation[i] = 0.0f;
+    }
     if ((input == NULL) || !SYS_ID_EXCITATION_ACTIVE ||
         (SYS_ID_EXCITATION_ENABLE == 0U) ||
         (SYS_ID_EXCITATION_MODE == SYS_ID_EXCITATION_DISABLED)) {
         return;
     }
 
-    static const float amplitudes[5] = {
+    static const float amplitudes[7] = {
         SYS_ID_EXCITATION_AMP_RIGHT_HIP,
         SYS_ID_EXCITATION_AMP_LEFT_HIP,
         SYS_ID_EXCITATION_AMP_RIGHT_WHEEL,
         SYS_ID_EXCITATION_AMP_LEFT_WHEEL,
         SYS_ID_EXCITATION_AMP_TAIL,
+        SYS_ID_EXCITATION_AMP_LEFT_LEG_FORCE,
+        SYS_ID_EXCITATION_AMP_RIGHT_LEG_FORCE,
     };
     const float elapsed_time = SYS_ID_EXCITATION_SAMPLE * CHASSIS_CONTROL_TIME_S;
-    const uint8_t channel_mask = SYS_ID_EXCITATION_CHANNEL_MASK;
+#if SYS_ID_OUTPUT_PROFILE == SYS_ID_PROFILE_12_STATE_5_INPUT
+    const uint8_t input_count = 5U;
+    const uint8_t channel_mask = SYS_ID_EXCITATION_INPUT_MASK & 0x1FU;
+#else
+    const uint8_t input_count = 7U;
+    const uint8_t channel_mask = SYS_ID_EXCITATION_INPUT_MASK & 0x7FU;
+#endif
 
-    for (uint8_t i = 0; i < 5U; ++i) {
+    for (uint8_t i = 0; i < input_count; ++i) {
         if (((channel_mask >> i) & 0x01U) == 0U) continue;
 
         float excitation = 0.0f;
@@ -1558,12 +1591,107 @@ static void SystemIdentificationApplyExcitation(float input[5])
                 &SYS_ID_PRBS_GENERATORS[i], amplitudes[i], 0.0f,
                 SYS_ID_PRBS_BIT_HOLD_SAMPLES);
         }
-        input[i] += excitation;
+        CHASSIS.fdb.excitation[i] = excitation;
+        if (i < 5U) input[i] += excitation;
     }
 
     if (SYS_ID_EXCITATION_SAMPLE < UINT32_MAX) {
         ++SYS_ID_EXCITATION_SAMPLE;
     }
+}
+
+static void SystemIdentificationFinalizeSnapshot(void)
+{
+    float left_force[2] = {0.0f, 0.0f};
+    float right_force[2] = {0.0f, 0.0f};
+    const float left_det = CHASSIS.fdb.leg[0].J[0][0] * CHASSIS.fdb.leg[0].J[1][1] -
+                           CHASSIS.fdb.leg[0].J[0][1] * CHASSIS.fdb.leg[0].J[1][0];
+    const float right_det = CHASSIS.fdb.leg[1].J[0][0] * CHASSIS.fdb.leg[1].J[1][1] -
+                            CHASSIS.fdb.leg[1].J[0][1] * CHASSIS.fdb.leg[1].J[1][0];
+    uint8_t status = SYS_ID_STATUS_MODE_VALID | SYS_ID_STATUS_REFERENCE_VALID;
+    uint8_t saturation = 0U;
+
+    CHASSIS.fdb.control_tick_ms = HAL_GetTick();
+    CHASSIS.fdb.control_sequence = ++SYS_ID_CONTROL_SEQUENCE;
+    CHASSIS.fdb.experiment_id = SYS_ID_EXPERIMENT_ID;
+    CHASSIS.fdb.reference_sequence = SYS_ID_REFERENCE_SEQUENCE;
+    CHASSIS.fdb.sys_id_excitation_config =
+        ((SYS_ID_EXCITATION_ENABLE != 0U) ? 0x01U : 0x00U) |
+        ((SYS_ID_EXCITATION_MODE & 0x03U) << 1U);
+#if SYS_ID_OUTPUT_PROFILE == SYS_ID_PROFILE_12_STATE_5_INPUT
+    CHASSIS.fdb.sys_id_excitation_input_mask = SYS_ID_EXCITATION_INPUT_MASK & 0x1FU;
+#else
+    CHASSIS.fdb.sys_id_excitation_input_mask = SYS_ID_EXCITATION_INPUT_MASK & 0x7FU;
+#endif
+
+    const bool sweep_finished =
+        (SYS_ID_EXCITATION_MODE == SYS_ID_EXCITATION_SINE_SWEEP) &&
+        (SYS_ID_EXCITATION_SAMPLE * CHASSIS_CONTROL_TIME_S > SYS_ID_SINE_SWEEP_DURATION);
+    if ((SYS_ID_EXCITATION_ENABLE != 0U) &&
+        (SYS_ID_EXCITATION_MODE != SYS_ID_EXCITATION_DISABLED) && !sweep_finished) {
+        status |= SYS_ID_STATUS_EXCITATION_ACTIVE;
+    }
+    if (sweep_finished) {
+        status |= SYS_ID_STATUS_SWEEP_FINISHED;
+    }
+    if (g_motor_offline_mask != 0U) status |= SYS_ID_STATUS_MOTOR_OFFLINE;
+
+    for (uint8_t i = 0; i < 7U; ++i) {
+        CHASSIS.fdb.generalized_actual_torque[i] = 0.0f;
+    }
+    if (!isfinite(left_det) || fabsf(left_det) < SYS_ID_JACOBIAN_DET_MIN) {
+        status |= SYS_ID_STATUS_LEFT_JACOBIAN_BAD;
+    } else {
+        GetLegForce(
+            CHASSIS.fdb.leg[0].J, CHASSIS.fdb.leg[0].joint.T1,
+            CHASSIS.fdb.leg[0].joint.T2, left_force);
+        CHASSIS.fdb.generalized_actual_torque[1] = -left_force[1];
+        CHASSIS.fdb.generalized_actual_torque[5] = left_force[0];
+    }
+    if (!isfinite(right_det) || fabsf(right_det) < SYS_ID_JACOBIAN_DET_MIN) {
+        status |= SYS_ID_STATUS_RIGHT_JACOBIAN_BAD;
+    } else {
+        GetLegForce(
+            CHASSIS.fdb.leg[1].J, CHASSIS.fdb.leg[1].joint.T1,
+            CHASSIS.fdb.leg[1].joint.T2, right_force);
+        CHASSIS.fdb.generalized_actual_torque[0] = -right_force[1];
+        CHASSIS.fdb.generalized_actual_torque[6] = right_force[0];
+    }
+    CHASSIS.fdb.generalized_actual_torque[2] = CHASSIS.fdb.motor_torque[5] * W1_DIRECTION;
+    CHASSIS.fdb.generalized_actual_torque[3] = CHASSIS.fdb.motor_torque[4] * W0_DIRECTION;
+    CHASSIS.fdb.generalized_actual_torque[4] = CHASSIS.fdb.motor_torque[6] * T_DIRECTION;
+    if ((status & (SYS_ID_STATUS_LEFT_JACOBIAN_BAD | SYS_ID_STATUS_RIGHT_JACOBIAN_BAD |
+                   SYS_ID_STATUS_MOTOR_OFFLINE)) == 0U) {
+        status |= SYS_ID_STATUS_ACTUAL_INPUT_VALID;
+    }
+
+    CHASSIS.fdb.equilibrium_input[5] =
+        LegFeedForward(CHASSIS.ref.rod_Angle[0]) * FF_RATIO;
+    CHASSIS.fdb.equilibrium_input[6] =
+        LegFeedForward(CHASSIS.ref.rod_Angle[1]) * FF_RATIO;
+    CHASSIS.fdb.lqr_output[5] =
+        CHASSIS.cmd.leg[0].rod.F - CHASSIS.fdb.equilibrium_input[5] - CHASSIS.fdb.excitation[5];
+    CHASSIS.fdb.lqr_output[6] =
+        CHASSIS.cmd.leg[1].rod.F - CHASSIS.fdb.equilibrium_input[6] - CHASSIS.fdb.excitation[6];
+
+    CHASSIS.fdb.generalized_command[0] = CHASSIS.cmd.leg[1].rod.Tp;
+    CHASSIS.fdb.generalized_command[1] = CHASSIS.cmd.leg[0].rod.Tp;
+    CHASSIS.fdb.generalized_command[2] = CHASSIS.cmd.leg[1].wheel.T;
+    CHASSIS.fdb.generalized_command[3] = CHASSIS.cmd.leg[0].wheel.T;
+    CHASSIS.fdb.generalized_command[4] = CHASSIS.cmd.tail.Tt;
+    CHASSIS.fdb.generalized_command[5] = CHASSIS.cmd.leg[0].rod.F;
+    CHASSIS.fdb.generalized_command[6] = CHASSIS.cmd.leg[1].rod.F;
+
+    if (fabsf(CHASSIS.joint_motor[0].set.tor) > LK_MAX_MG6012_TORQUE) saturation |= 0x01U;
+    if (fabsf(CHASSIS.joint_motor[1].set.tor) > LK_MAX_MG6012_TORQUE) saturation |= 0x02U;
+    if (fabsf(CHASSIS.joint_motor[2].set.tor) > LK_MAX_MG6012_TORQUE) saturation |= 0x04U;
+    if (fabsf(CHASSIS.joint_motor[3].set.tor) > LK_MAX_MG6012_TORQUE) saturation |= 0x08U;
+    if (fabsf(CHASSIS.wheel_motor[0].set.tor) > LK_MAX_MF9025_TORQUE) saturation |= 0x10U;
+    if (fabsf(CHASSIS.wheel_motor[1].set.tor) > LK_MAX_MF9025_TORQUE) saturation |= 0x20U;
+    if (fabsf(CHASSIS.tail_motor.set.tor) > LK_MAX_MG5010_TORQUE) saturation |= 0x40U;
+
+    CHASSIS.fdb.sys_id_status_flags = status;
+    CHASSIS.fdb.sys_id_saturation_mask = saturation;
 }
 
 
@@ -1624,6 +1752,9 @@ void ChassisConsole(void)
     CHASSIS.fdb.torque[2] = CHASSIS.cmd.leg[1].wheel.T;   // K[2] 右轮力矩
     CHASSIS.fdb.torque[3] = CHASSIS.cmd.leg[0].wheel.T;   // K[3] 左轮力矩
     CHASSIS.fdb.torque[4] = CHASSIS.cmd.tail.Tt;           // K[4] 尾电机力矩
+    if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
+        SystemIdentificationFinalizeSnapshot();
+    }
     ChassisSnapshotPublish(&CHASSIS.fdb, &CHASSIS.ref);
 }
 
@@ -2230,9 +2361,9 @@ static void LocomotionController_Pro_Bipedal(void)
 
     // LQR 计算。系统辨识模式固定工作点对应的增益，其余模式使用实时腿长增益。
     const float l_l = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
-                          SYS_ID_LEG_LENGTH : CHASSIS.fdb.leg[0].rod.L0;
+                          SYS_ID_REF_LEFT_LEG_LENGTH : CHASSIS.fdb.leg[0].rod.L0;
     const float l_r = (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) ?
-                          SYS_ID_LEG_LENGTH : CHASSIS.fdb.leg[1].rod.L0;
+                          SYS_ID_REF_RIGHT_LEG_LENGTH : CHASSIS.fdb.leg[1].rod.L0;
     GetK_Pro_Bipedal(l_l, l_r, k, is_take_off);
     GetTheta_Pro_Bipedal(l_l, l_r, theta_eq);
     GetT0_Pro_Bipedal(l_l, l_r, T0_eq);
@@ -2257,6 +2388,17 @@ static void LocomotionController_Pro_Bipedal(void)
     x[10] = X10_OFFSET + (CHASSIS.fdb.tail_state.beta - CHASSIS.ref.tail_state.beta);
     x[11] = X11_OFFSET + (CHASSIS.fdb.tail_state.beta_dot - CHASSIS.ref.tail_state.beta_dot);
     CalcLQR_Pro_Tail(k, x, Tp_T_Tt);
+
+    for (uint8_t i = 0; i < 7U; ++i) {
+        CHASSIS.fdb.lqr_output[i] = 0.0f;
+        CHASSIS.fdb.equilibrium_input[i] = 0.0f;
+    }
+    for (uint8_t i = 0; i < 5U; ++i) {
+        CHASSIS.fdb.lqr_output[i] = Tp_T_Tt[i];
+    }
+    CHASSIS.fdb.equilibrium_input[0] = T0_eq[0];
+    CHASSIS.fdb.equilibrium_input[1] = T0_eq[0];
+    CHASSIS.fdb.equilibrium_input[4] = T0_eq[1];
 
     // 系统辨识激励叠加在LQR广义力矩之后，随后再进行VMC映射和电机限幅。
     if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
@@ -2376,6 +2518,11 @@ static void LegTorqueController(void)
 
     CHASSIS.cmd.leg[0].rod.F -= roll_vel_limit_f;
     CHASSIS.cmd.leg[1].rod.F += roll_vel_limit_f;
+
+    if (CHASSIS.mode == CHASSIS_SYSTEM_IDENTIFICATION) {
+        CHASSIS.cmd.leg[0].rod.F += CHASSIS.fdb.excitation[5];
+        CHASSIS.cmd.leg[1].rod.F += CHASSIS.fdb.excitation[6];
+    }
 
     // 转换为关节力矩
     CalcVmc(

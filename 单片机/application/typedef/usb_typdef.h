@@ -21,6 +21,19 @@
 #define MOTOR_ERROR_SEND_ID       ((uint8_t)0x0D)
 #define MOTOR_DATA_SEND_ID        ((uint8_t)0x0E)
 #define RL_STATE_DATA_SEND_ID     ((uint8_t)0x0F)
+#define SYSTEM_IDENTIFICATION_12_DATA_SEND_ID ((uint8_t)0x10)
+#define SYSTEM_IDENTIFICATION_18_DATA_SEND_ID ((uint8_t)0x11)
+#define SYSTEM_IDENTIFICATION_REFERENCE_SEND_ID ((uint8_t)0x12)
+
+#define SYS_ID_PROTOCOL_VERSION         ((uint8_t)0x01)
+#define SYS_ID_STATUS_MODE_VALID        ((uint8_t)0x01)
+#define SYS_ID_STATUS_EXCITATION_ACTIVE ((uint8_t)0x02)
+#define SYS_ID_STATUS_SWEEP_FINISHED    ((uint8_t)0x04)
+#define SYS_ID_STATUS_MOTOR_OFFLINE     ((uint8_t)0x08)
+#define SYS_ID_STATUS_LEFT_JACOBIAN_BAD ((uint8_t)0x10)
+#define SYS_ID_STATUS_RIGHT_JACOBIAN_BAD ((uint8_t)0x20)
+#define SYS_ID_STATUS_ACTUAL_INPUT_VALID ((uint8_t)0x40)
+#define SYS_ID_STATUS_REFERENCE_VALID   ((uint8_t)0x80)
 
 #define ROBOT_CMD_DATA_RECEIVE_ID  ((uint8_t)0x01)
 #define VIRTUAL_RC_DATA_RECEIVE_ID ((uint8_t)0x03)
@@ -218,6 +231,72 @@ typedef struct
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataRlState_s;
+
+typedef struct
+{
+    FrameHeader_t frame_header;
+    uint32_t control_tick_ms;
+    uint32_t sequence;
+    uint32_t experiment_id;
+    uint32_t reference_sequence;
+    uint8_t protocol_version;
+    uint8_t profile_id;
+    uint8_t state_dimension;
+    uint8_t input_dimension;
+    uint8_t excitation_config;
+    uint8_t excitation_input_mask;
+    uint8_t status_flags;
+    uint8_t motor_saturation_mask;
+} __packed__ SystemIdentificationFrameCommon_t;
+
+typedef struct
+{
+    SystemIdentificationFrameCommon_t common;
+    float state_feedback[12];
+    float controller_output[5];
+    float excitation[5];
+    float generalized_command[5];
+    float generalized_actual_torque[5];
+    float motor_feedback_torque[7];
+    uint16_t crc;
+} __packed__ SendDataSystemIdentification12_s;
+
+typedef struct
+{
+    SystemIdentificationFrameCommon_t common;
+    float state_feedback[18];
+    float controller_output[7];
+    float excitation[7];
+    float generalized_command[7];
+    float generalized_actual_torque[7];
+    float motor_feedback_torque[7];
+    uint16_t crc;
+} __packed__ SendDataSystemIdentification18_s;
+
+typedef struct
+{
+    FrameHeader_t frame_header;
+    uint32_t experiment_id;
+    uint32_t reference_sequence;
+    uint8_t protocol_version;
+    uint8_t profile_id;
+    uint8_t state_dimension;
+    uint8_t input_dimension;
+    uint8_t excitation_config;
+    uint8_t excitation_input_mask;
+    uint8_t reserved[2];
+    float state_reference[18];
+    float equilibrium_input[7];
+    uint16_t crc;
+} __packed__ SendDataSystemIdentificationReference_s;
+
+// 帧头len只有8位；若未来扩展字段导致payload超过255字节，编译必须失败。
+typedef char SysId12PayloadMustFitUint8[
+    ((sizeof(SendDataSystemIdentification12_s) - 6U) <= 255U) ? 1 : -1];
+typedef char SysId18PayloadMustFitUint8[
+    ((sizeof(SendDataSystemIdentification18_s) - 6U) <= 255U) ? 1 : -1];
+typedef char SysIdReferencePayloadMustFitUint8[
+    ((sizeof(SendDataSystemIdentificationReference_s) - 6U) <= 255U) ? 1 : -1];
 
 /*-------------------- Receive --------------------*/
 // 机器人控制指令数据包

@@ -101,6 +101,54 @@ ID_TORQUE = 0x0C
 ID_MOTOR_ERROR = 0x0D
 ID_MOTOR_DATA = 0x0E
 ID_RL_STATE = 0x0F
+ID_SYS_ID_12 = 0x10
+ID_SYS_ID_18 = 0x11
+ID_SYS_ID_REFERENCE = 0x12
+
+SYS_ID_COMMON_COLUMNS = [
+    "control_tick_ms", "sequence", "experiment_id", "reference_sequence",
+    "protocol_version", "profile_id", "state_dimension", "input_dimension",
+    "excitation_config", "excitation_input_mask", "status_flags", "motor_saturation_mask",
+]
+SYS_ID_STATE_COLUMNS = [
+    "body_x", "body_x_dot", "yaw", "yaw_dot", "left_theta", "left_theta_dot",
+    "right_theta", "right_theta_dot", "pitch", "pitch_dot", "tail_beta", "tail_beta_dot",
+    "roll", "roll_dot", "left_leg_length", "left_leg_length_dot",
+    "right_leg_length", "right_leg_length_dot",
+]
+SYS_ID_INPUT_COLUMNS = [
+    "right_hip_tp", "left_hip_tp", "right_wheel_t", "left_wheel_t", "tail_t",
+    "left_leg_force", "right_leg_force",
+]
+SYS_ID_MOTOR_TORQUE_COLUMNS = [
+    "J0_feedback_torque", "J1_feedback_torque", "J2_feedback_torque",
+    "J3_feedback_torque", "W0_feedback_torque", "W1_feedback_torque", "Tail_feedback_torque",
+]
+SYS_ID_12_STRUCT = struct.Struct("<4I8B39f")
+SYS_ID_18_STRUCT = struct.Struct("<4I8B53f")
+SYS_ID_REFERENCE_STRUCT = struct.Struct("<2I8B25f")
+SYS_ID_12_COLUMNS = (
+    SYS_ID_COMMON_COLUMNS + SYS_ID_STATE_COLUMNS[:12]
+    + [f"controller_{name}" for name in SYS_ID_INPUT_COLUMNS[:5]]
+    + [f"excitation_{name}" for name in SYS_ID_INPUT_COLUMNS[:5]]
+    + [f"command_{name}" for name in SYS_ID_INPUT_COLUMNS[:5]]
+    + [f"actual_{name}" for name in SYS_ID_INPUT_COLUMNS[:5]]
+    + SYS_ID_MOTOR_TORQUE_COLUMNS
+)
+SYS_ID_18_COLUMNS = (
+    SYS_ID_COMMON_COLUMNS + SYS_ID_STATE_COLUMNS
+    + [f"controller_{name}" for name in SYS_ID_INPUT_COLUMNS]
+    + [f"excitation_{name}" for name in SYS_ID_INPUT_COLUMNS]
+    + [f"command_{name}" for name in SYS_ID_INPUT_COLUMNS]
+    + [f"actual_{name}" for name in SYS_ID_INPUT_COLUMNS]
+    + SYS_ID_MOTOR_TORQUE_COLUMNS
+)
+SYS_ID_REFERENCE_COLUMNS = (
+    ["experiment_id", "reference_sequence", "protocol_version", "profile_id",
+     "state_dimension", "input_dimension", "excitation_config", "excitation_input_mask"]
+    + [f"reference_{name}" for name in SYS_ID_STATE_COLUMNS]
+    + [f"equilibrium_{name}" for name in SYS_ID_INPUT_COLUMNS]
+)
 
 PID_DEBUG_STRUCT = struct.Struct("<I3f")
 PID_DEBUG_COLUMNS = ["tick_ms", "fdb", "ref", "pid_out"]
@@ -262,6 +310,15 @@ class CsvSink:
         self.rl_state_file = open(
             os.path.join(outdir, "rl_state.csv"), "w", newline="", encoding="utf-8"
         )
+        self.sys_id_12_file = open(
+            os.path.join(outdir, "system_identification_12.csv"), "w", newline="", encoding="utf-8"
+        )
+        self.sys_id_18_file = open(
+            os.path.join(outdir, "system_identification_18.csv"), "w", newline="", encoding="utf-8"
+        )
+        self.sys_id_reference_file = open(
+            os.path.join(outdir, "system_identification_reference.csv"), "w", newline="", encoding="utf-8"
+        )
         self.unknown_file = open(
             os.path.join(outdir, "unknown_frames.csv"), "w", newline="", encoding="utf-8"
         )
@@ -274,6 +331,9 @@ class CsvSink:
         self.motor_data_writer = csv.writer(self.motor_data_file)
         self.pid_debug_writer = csv.writer(self.pid_debug_file)
         self.rl_state_writer = csv.writer(self.rl_state_file)
+        self.sys_id_12_writer = csv.writer(self.sys_id_12_file)
+        self.sys_id_18_writer = csv.writer(self.sys_id_18_file)
+        self.sys_id_reference_writer = csv.writer(self.sys_id_reference_file)
         self.unknown_writer = csv.writer(self.unknown_file)
 
         self.imu_writer.writerow(
@@ -286,6 +346,9 @@ class CsvSink:
         self.motor_data_writer.writerow(["host_time_s"] + MOTOR_DATA_COLUMNS)
         self.pid_debug_writer.writerow(["host_time_s"] + PID_DEBUG_COLUMNS)
         self.rl_state_writer.writerow(["host_time_s"] + RL_STATE_COLUMNS)
+        self.sys_id_12_writer.writerow(["host_time_s"] + SYS_ID_12_COLUMNS)
+        self.sys_id_18_writer.writerow(["host_time_s"] + SYS_ID_18_COLUMNS)
+        self.sys_id_reference_writer.writerow(["host_time_s"] + SYS_ID_REFERENCE_COLUMNS)
         self.unknown_writer.writerow(["host_time_s", "id_hex", "payload_len", "frame_hex"])
 
         self.imu_rows: List[List[float]] = []
@@ -296,6 +359,9 @@ class CsvSink:
         self.motor_data_rows: List[List[float]] = []
         self.pid_debug_rows: List[List[float]] = []
         self.rl_state_rows: List[List[float]] = []
+        self.sys_id_12_rows: List[List[float]] = []
+        self.sys_id_18_rows: List[List[float]] = []
+        self.sys_id_reference_rows: List[List[float]] = []
 
     def write_imu(self, host_t: float, row: List[float]) -> None:
         line = [host_t] + row
@@ -337,6 +403,20 @@ class CsvSink:
         self.rl_state_writer.writerow(line)
         self.rl_state_rows.append(line)
 
+    def write_sys_id(self, kind: str, host_t: float, row: List[float]) -> None:
+        line = [host_t] + row
+        if kind == "sys_id_12":
+            self.sys_id_12_writer.writerow(line)
+            self.sys_id_12_rows.append(line)
+        else:
+            self.sys_id_18_writer.writerow(line)
+            self.sys_id_18_rows.append(line)
+
+    def write_sys_id_reference(self, host_t: float, row: List[float]) -> None:
+        line = [host_t] + row
+        self.sys_id_reference_writer.writerow(line)
+        self.sys_id_reference_rows.append(line)
+
     def write_unknown(self, host_t: float, pkt_id: int, payload_len: int, frame_hex: str) -> None:
         self.unknown_writer.writerow([host_t, f"0x{pkt_id:02X}", payload_len, frame_hex])
 
@@ -349,6 +429,9 @@ class CsvSink:
         self.motor_data_file.flush()
         self.pid_debug_file.flush()
         self.rl_state_file.flush()
+        self.sys_id_12_file.flush()
+        self.sys_id_18_file.flush()
+        self.sys_id_reference_file.flush()
         self.unknown_file.flush()
 
     def close(self) -> None:
@@ -361,6 +444,9 @@ class CsvSink:
         self.motor_data_file.close()
         self.pid_debug_file.close()
         self.rl_state_file.close()
+        self.sys_id_12_file.close()
+        self.sys_id_18_file.close()
+        self.sys_id_reference_file.close()
         self.unknown_file.close()
 
 
@@ -495,6 +581,29 @@ def decode_frame(frame: bytes) -> Optional[Dict[str, object]]:
             "host_time": host_t,
             "row": list(RL_STATE_STRUCT.unpack(payload)),
         }
+
+    if pkt_id == ID_SYS_ID_12 and len(payload) == SYS_ID_12_STRUCT.size:
+        row = list(SYS_ID_12_STRUCT.unpack(payload))
+        if int(row[5]) == 1 and int(row[6]) == 12 and int(row[7]) == 5:
+            return {"type": "sys_id_12", "host_time": host_t, "row": row}
+
+    if pkt_id == ID_SYS_ID_18 and len(payload) == SYS_ID_18_STRUCT.size:
+        row = list(SYS_ID_18_STRUCT.unpack(payload))
+        if int(row[5]) == 2 and int(row[6]) == 18 and int(row[7]) == 7:
+            return {"type": "sys_id_18", "host_time": host_t, "row": row}
+
+    if pkt_id == ID_SYS_ID_REFERENCE and len(payload) == SYS_ID_REFERENCE_STRUCT.size:
+        unpacked = list(SYS_ID_REFERENCE_STRUCT.unpack(payload))
+        row = unpacked[:8] + unpacked[10:]  # 丢弃固件结构中的两个reserved字节
+        profile_id = int(row[3])
+        state_dimension = int(row[4])
+        input_dimension = int(row[5])
+        dimensions_valid = (
+            (profile_id == 1 and state_dimension == 12 and input_dimension == 5)
+            or (profile_id == 2 and state_dimension == 18 and input_dimension == 7)
+        )
+        if dimensions_valid:
+            return {"type": "sys_id_reference", "host_time": host_t, "row": row}
 
     return {
         "type": "unknown",
@@ -655,6 +764,15 @@ def export_mat(outdir: str, sink: CsvSink) -> None:
         "rl_state": np.array(sink.rl_state_rows, dtype=float)
         if sink.rl_state_rows
         else np.empty((0, 35), dtype=float),
+        "system_identification_12": np.array(sink.sys_id_12_rows, dtype=float)
+        if sink.sys_id_12_rows
+        else np.empty((0, 52), dtype=float),
+        "system_identification_18": np.array(sink.sys_id_18_rows, dtype=float)
+        if sink.sys_id_18_rows
+        else np.empty((0, 66), dtype=float),
+        "system_identification_reference": np.array(sink.sys_id_reference_rows, dtype=float)
+        if sink.sys_id_reference_rows
+        else np.empty((0, 34), dtype=float),
     }
 
     mat_path = os.path.join(outdir, "usb_log.mat")
@@ -799,6 +917,25 @@ def run(args: argparse.Namespace) -> int:
                                     f"[RL-STATE] tick={int(row[0])} seq={int(row[1])} "
                                     f"roll={row[6]:.3f} pitch={row[7]:.3f} vx={row[12]:.3f} "
                                     f"mode={int(row[32])}",
+                                    args,
+                                )
+                        elif kind in ("sys_id_12", "sys_id_18"):
+                            row = list(decoded["row"])
+                            sink.write_sys_id(kind, host_t, row)
+                            if getattr(args, "realtime", False):
+                                realtime_emit_append(
+                                    f"[SYS-ID] profile={int(row[5])} tick={int(row[0])} "
+                                    f"seq={int(row[1])} experiment={int(row[2])} "
+                                    f"status=0x{int(row[10]):02X}",
+                                    args,
+                                )
+                        elif kind == "sys_id_reference":
+                            row = list(decoded["row"])
+                            sink.write_sys_id_reference(host_t, row)
+                            if getattr(args, "realtime", False):
+                                realtime_emit_append(
+                                    f"[SYS-ID-REF] profile={int(row[3])} "
+                                    f"experiment={int(row[0])} reference={int(row[1])}",
                                     args,
                                 )
                         else:

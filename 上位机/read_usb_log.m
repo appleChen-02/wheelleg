@@ -13,6 +13,9 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 %   - robot_target.csv
 %   - torque.csv
 %   - motor_data.csv
+%   - system_identification_12.csv
+%   - system_identification_18.csv
+%   - system_identification_reference.csv
 %   - unknown_frames.csv
 %   - usb_log.mat (optional, if exported)
 %
@@ -54,6 +57,9 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
     pidDebugFile = fullfile(logDir, 'pid_debug.csv');
     rlStateFile = fullfile(logDir, 'rl_state.csv');
     motorErrorFile = fullfile(logDir, 'motor_error.csv');
+    sysId12File = fullfile(logDir, 'system_identification_12.csv');
+    sysId18File = fullfile(logDir, 'system_identification_18.csv');
+    sysIdReferenceFile = fullfile(logDir, 'system_identification_reference.csv');
     unknownFile = fullfile(logDir, 'unknown_frames.csv');
     matFile = fullfile(logDir, 'usb_log.mat');
 
@@ -103,6 +109,24 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
         log.motor_error = readtable(motorErrorFile, 'VariableNamingRule', 'preserve');
     else
         log.motor_error = table();
+    end
+
+    if isfile(sysId12File)
+        log.system_identification_12 = readtable(sysId12File, 'VariableNamingRule', 'preserve');
+    else
+        log.system_identification_12 = table();
+    end
+
+    if isfile(sysId18File)
+        log.system_identification_18 = readtable(sysId18File, 'VariableNamingRule', 'preserve');
+    else
+        log.system_identification_18 = table();
+    end
+
+    if isfile(sysIdReferenceFile)
+        log.system_identification_reference = readtable(sysIdReferenceFile, 'VariableNamingRule', 'preserve');
+    else
+        log.system_identification_reference = table();
     end
 
     if isfile(unknownFile)
@@ -764,7 +788,9 @@ end
 
 function timeOrigin = get_log_time_origin(log)
     timeOrigin = NaN;
-    candidateFields = {'robot_motion', 'robot_target', 'imu', 'torque', 'motor_data', 'motor_error', 'unknown_frames'};
+    candidateFields = {'system_identification_12', 'system_identification_18', ...
+        'system_identification_reference', 'robot_motion', 'robot_target', 'imu', ...
+        'torque', 'motor_data', 'motor_error', 'unknown_frames'};
     for idx = 1:numel(candidateFields)
         fieldName = candidateFields{idx};
         if isfield(log, fieldName)
@@ -788,7 +814,9 @@ function timeOrigin = get_log_time_origin(log)
 end
 
 function log = apply_time_range_filter(log, timeRange, timeOrigin)
-    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'motor_data', 'motor_error', 'unknown_frames'};
+    filterFields = {'imu', 'robot_motion', 'robot_target', 'torque', 'motor_data', ...
+        'motor_error', 'system_identification_12', 'system_identification_18', ...
+        'system_identification_reference', 'unknown_frames'};
     for idx = 1:numel(filterFields)
         fieldName = filterFields{idx};
         if ~isfield(log, fieldName)
