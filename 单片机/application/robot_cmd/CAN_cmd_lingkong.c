@@ -248,42 +248,18 @@ void LkEnable(Motor_s * p_motor)
 
 fp32 Torque2iqControl_MG6012(fp32 tor)
 {
-    if (tor == 0.0f) return 0.0f;
-
-    float sign = (tor > 0.0f) ? 1.0f : -1.0f;
-    float x = (tor > 0.0f) ? tor : -tor;   // fabsf(Torque) 也行
-
-    // Horner: ((((a6*x + a5)*x + a4)*x + a3)*x + a2)*x + a1)*x + a0
-    float y =
-        ((((((0.000005f  * x
-            - 0.0006f)  * x
-            + 0.0283f)  * x
-            - 0.6985f)  * x
-            + 8.6584f)  * x
-            - 31.982f)  * x
-            + 87.13f);
-
-    return sign * y;
+    // Manual-based ideal model; tor is output-shaft torque in N*m.
+    // MG6012-i36, 24 V: T_out = 36 * 0.175 * Iq.
+    // Preserve the existing CAN command scale: iqControl = 62.5 * Iq.
+    return tor / (LK_RATIO_MG6012 * LK_TORQUE_CONSTANT_MG6012) * CURRENT_TO_MULTICONTROL;
 }
 
 fp32 Torque2iqControl_MG5010(fp32 tor)
 {
-    if (tor == 0.0f) return 0.0f;
-
-    float sign = (tor > 0.0f) ? 1.0f : -1.0f;
-    float x = (tor > 0.0f) ? tor : -tor;   // fabsf(Torque) 也行
-
-    // Horner: ((((a6*x + a5)*x + a4)*x + a3)*x + a2)*x + a1)*x + a0
-    float y =
-        ((((((-0.007f  * x
-            - 0.0388f)  * x
-            + 1.5394f)  * x
-            - 7.7984f)  * x
-            + 3.9453f)  * x
-            + 228.07f)  * x
-            + 1.2446f);
-
-    return sign * y;
+    // Manual-based ideal model; tor is output-shaft torque in N*m.
+    // MG5010E-i10: T_out = 10 * 0.1 * Iq.
+    // Preserve the existing CAN command scale: iqControl = 62.5 * Iq.
+    return tor / (LK_RATIO_MG5010 * LK_TORQUE_CONSTANT_MG5010) * CURRENT_TO_MULTICONTROL;
 }
 // 逐个电机  A1  扭矩控制
 void LkSingleTorqueControl(Motor_s * p_motor)

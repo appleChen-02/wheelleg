@@ -28,7 +28,7 @@ clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = '';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\轮足\单片机\matlab\读取测试\test0909_1';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';
@@ -41,6 +41,7 @@ cfg.expectedInputDim  = 5;
 cfg.excitationAbsTol  = 1e-4;   % N*m，excitation 通道视为全零的阈值
 
 cfg.nominalDt  = 0.004;         % 250Hz 采样帧周期
+cfg.controlPeriodS = 0.002;     % 固件控制周期(2ms)：sequence 按该周期递增
 cfg.dropFactor = 1.5;           % dt > 1.5*nominal 判为丢帧
 
 cfg.psdWindowSec = 10;                        % Welch 窗长（s）
@@ -184,8 +185,12 @@ nLostSamples   = max(expectedFromDt - numel(tAll), 0);
 dropRate = nLostSamples / max(expectedFromDt, 1);
 
 dseq = diff(seq);
-nSeqGap  = sum(dseq ~= 1);
-nSeqLost = sum(max(dseq - 1, 0));
+% 固件 sequence 按控制周期(2ms)递增，USB 帧按 250Hz 发送，相邻帧差为 2；
+% 期望差值必须用控制周期 cfg.controlPeriodS 推算（dt/0.002），
+% 不能用 USB 帧周期 nominalDt（dt/0.004 会得到 1，把正常差值 2 全部误报为缺帧）
+expectedSeqStep = max(round(max(dt, 0) / cfg.controlPeriodS), 1);
+nSeqGap  = sum(dseq ~= expectedSeqStep);
+nSeqLost = sum(max(dseq - expectedSeqStep, 0));
 if nSeqGap > 0
     issues{end+1} = sprintf('sequence 有 %d 处不连续（累计缺 %d 帧）。', nSeqGap, nSeqLost); %#ok<AGROW>
 end
@@ -487,8 +492,8 @@ writeCsv(biasT, fullfile(outDir, 'state_bias.csv'));
 % ---- 统计/漂移/协方差 ----
 writeCsv(stateStats, fullfile(outDir, 'state_statistics.csv'));
 writeCsv(inputStats, fullfile(outDir, 'input_statistics.csv'));
-driftT = table({drift.name}, [drift.slope]', [drift.ciLo]', [drift.ciHi]', ...
-    [drift.intercept]', [drift.r2]', [drift.quadCoef]', [drift.quadSig]', {drift.verdict}', ...
+driftT = table({drift.name}.', [drift.slope]', [drift.ciLo]', [drift.ciHi]', ...
+    [drift.intercept]', [drift.r2]', [drift.quadCoef]', [drift.quadSig]', {drift.verdict}.', ...
     'VariableNames', {'channel','slope_per_s','ci95_lo','ci95_hi','intercept', ...
                       'r2_linear','quad_coef','quad_significant','verdict'});
 writeCsv(driftT, fullfile(outDir, 'drift_statistics.csv'));
@@ -658,7 +663,7 @@ end
 fprintf('\n--- 4) LQR 输出偏置与波动 ---\n');
 for k = 1:5
     fprintf('%-16s 偏置=%+.4f Nm, std=%.4f Nm (command std=%.4f, actual std=%.4f)\n', ...
-        inputNames{k}, u_eq(k), sqrt(CovU(k,k)), sqrt(Cov(Cd(:,k))), sqrt(Cov(Ad(:,k))));
+        inputNames{k}, u_eq(k), sqrt(CovU(k,k)), sqrt(cov(Cd(:,k))), sqrt(cov(Ad(:,k))));
 end
 fprintf('\n--- 5) 日志一致性: command - controller - equilibrium - excitation ---\n');
 for k = 1:5
