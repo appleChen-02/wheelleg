@@ -203,7 +203,7 @@ typedef struct
     struct
     {
         float position[7];  // rad [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
-        float torque[7];    // N*m 电机反馈力矩，电机侧 iq 换算值
+        float torque[7];    // N*m 减速器输出轴反馈力矩
     } __packed__ data;
     uint16_t crc;
 } __packed__ SendDataMotor_s;
@@ -257,7 +257,7 @@ typedef struct
     float excitation[5];
     float generalized_command[5];
     float generalized_actual_torque[5];
-    float motor_feedback_torque[7];
+    float motor_feedback_torque[7];  // N*m 减速器输出轴反馈力矩
     uint16_t crc;
 } __packed__ SendDataSystemIdentification12_s;
 
@@ -269,7 +269,7 @@ typedef struct
     float excitation[7];
     float generalized_command[7];
     float generalized_actual_torque[7];
-    float motor_feedback_torque[7];
+    float motor_feedback_torque[7];  // N*m 减速器输出轴反馈力矩
     uint16_t crc;
 } __packed__ SendDataSystemIdentification18_s;
 

@@ -211,16 +211,17 @@ static void GetLkFdbData(Motor_s * motor, const LkMeasure_s * lk_measure)
     // motor->fdb.pos = uint_to_float(lk_measure->encoder, -M_PI, M_PI, 16);
     motor->fdb.pos = lk_measure->encoder * DOUBLE_PI / 65536;  //角度位置
 
+    // iq 反馈先换算为电机侧电磁扭矩，再乘内置减速比，统一输出为减速器输出轴扭矩。
     if (motor->type == MF_9025) {
         motor->fdb.tor = lk_measure->iq * MF_CONTROL_TO_CURRENT * LK_TORQUE_CONSTANT_MF9025;
         motor->fdb.vel = lk_measure->speed * DEGREE_TO_RAD;
     } else if (motor->type == MG_6012) {
         motor->fdb.tor =
-            lk_measure->iq * MG_CONTROL_TO_CURRENT * LK_TORQUE_CONSTANT_MG6012;// * LK_RATIO_MG6012;
+            lk_measure->iq * MG_CONTROL_TO_CURRENT * LK_TORQUE_CONSTANT_MG6012 * LK_RATIO_MG6012;
         motor->fdb.vel = lk_measure->speed * DEGREE_TO_RAD / LK_RATIO_MG6012;
     } else if (motor->type == MG_5010) {
         motor->fdb.tor =
-            lk_measure->iq * MG_CONTROL_TO_CURRENT * LK_TORQUE_CONSTANT_MG5010;// * LK_RATIO_MG5010;
+            lk_measure->iq * MG_CONTROL_TO_CURRENT * LK_TORQUE_CONSTANT_MG5010 * LK_RATIO_MG5010;
         motor->fdb.vel = lk_measure->speed * DEGREE_TO_RAD / LK_RATIO_MG5010;
     }
 

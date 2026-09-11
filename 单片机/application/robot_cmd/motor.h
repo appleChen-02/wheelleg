@@ -143,7 +143,7 @@ typedef struct
 /**
  * @brief  通用电机结构体
  * @note   包括电机的信息、状态量和控制量
- * @note   电机信息部分的参数不影响电机的反馈数据，由用户自行使用与处理
+ * @note   减速比用于将电流反馈换算为减速器输出轴扭矩和转速
  */
 typedef struct __Motor
 {
@@ -151,7 +151,7 @@ typedef struct __Motor
     uint8_t id;             // 电机ID
     MotorType_e type;       // 电机类型
     uint8_t can;            // 电机所用CAN口
-    float reduction_ratio;  // 电机减速比，例如2006为36:1，则reduction_ratio=36
+    float reduction_ratio;  // 内置减速器减速比，用于反馈量换算到输出轴
     int8_t direction;       // 电机和(执行机构在模型中定义的旋转方向)的关系（1或-1），例如：
     uint16_t mode;          // 电机模式
     bool offline;           // 电机是否离线
@@ -162,7 +162,7 @@ typedef struct __Motor
         float acc;  // (rad/s^2)电机加速度
 
         float vel;   // (rad/s) 电机反馈转速
-        float tor;   // (N*m)   电机反馈力矩
+        float tor;   // (N*m)   减速器输出轴反馈力矩
         float pos;   // (rad)   电机反馈位置
         float temp;  // (℃)    电机反馈温度
         float curr;  // (A)     电机反馈电流

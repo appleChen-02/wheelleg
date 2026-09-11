@@ -185,7 +185,7 @@ typedef struct
     TailState_t tail_state;    // 尾巴状态量
     ChassisSpeedVector_t speed_vector;  // 底盘速度向量
     float motor_pos[7];           // rad 电机实时角度: [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
-    float motor_torque[7];        // N*m 电机反馈力矩: [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
+    float motor_torque[7];        // N*m 减速器输出轴反馈力矩: [0..3]=J0..J3, [4..5]=W0..W1, [6]=Tail
     float motor_vel[7];           // rad/s, same order as motor_pos
     float torque[5];            // N*m 控制力矩输出: [0]=T_r_to_b(右髋), [1]=T_l_to_b(左髋), [2]=T_wr_to_r(右轮), [3]=T_wl_to_l(左轮), [4]=T_t_to_b(尾)
     uint32_t control_tick_ms;
