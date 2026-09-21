@@ -230,6 +230,9 @@ void IMU_task(void const * pvParameters)
 
     while (1)
     {
+        // 磁力计通常低于 IMU 主循环频率；只有本轮读取到新样本时才进行一次 yaw 融合。
+        bool mag_new_sample = false;
+
         //wait spi DMA tansmit done
         //等待SPI DMA传输
         while (ulTaskNotifyTake(pdTRUE, portMAX_DELAY) != pdPASS)
@@ -260,6 +263,7 @@ void IMU_task(void const * pvParameters)
             mag_update_flag &= ~(1 << IMU_DR_SHFITS);
             ist8310_read_mag(ist8310_real_data.mag);
             ist8310_real_data.status |= 1 << IST8310_DATA_READY_BIT;
+            mag_new_sample = true;
         }
         
         // rotate
@@ -270,13 +274,18 @@ void IMU_task(void const * pvParameters)
         gEstimateKF_Update(INS_gyro[0],  INS_gyro[1],  INS_gyro[2],
                            INS_accel[0], INS_accel[1], INS_accel[2],
                            timing_time);
+        // 在姿态 EKF 更新前，用原始加速度和已完成安装方向变换的陀螺仪数据校准 yaw 零偏。
+        IMU_YawBiasCalibrationUpdate(
+            INS_gyro[0], INS_gyro[1], INS_gyro[2],
+            INS_accel[0], INS_accel[1], INS_accel[2], timing_time);
         // 更新欧拉角
         IMU_QuaternionEKF_Update(INS_gyro[0], INS_gyro[1], INS_gyro[2],
                                  gVec[0], gVec[1], gVec[2],
                                  timing_time);
 
-        if(ist8310_real_data.status & (1 << IST8310_DATA_READY_BIT))
+        if (mag_new_sample)
         {
+            // 不重复融合上一帧磁力计数据，避免 blend 被按 IMU 频率重复施加。
             imu_mag_yaw_fuse(INS_mag);
         }
         // clang-format on
@@ -440,9 +449,11 @@ static void UpdateImuData(void)
         IMU_DATA.angle_smooth[AX_Z] = IMU_DATA.angle[AX_Z];
     }
 
-    IMU_DATA.gyro[AX_X] = INS_gyro[AX_X];
-    IMU_DATA.gyro[AX_Y] = INS_gyro[AX_Y];
-    IMU_DATA.gyro[AX_Z] = INS_gyro[AX_Z];
+    // 对外发布已经扣除陀螺仪零偏的角速度。
+    // INS_gyro 保留为 IMU 内部的原始角速度，用于零偏校准和问题定位。
+    IMU_DATA.gyro[AX_X] = INS_gyro[AX_X] - INS.GyroBias[AX_X];
+    IMU_DATA.gyro[AX_Y] = INS_gyro[AX_Y] - INS.GyroBias[AX_Y];
+    IMU_DATA.gyro[AX_Z] = INS_gyro[AX_Z] - INS.GyroBias[AX_Z];
 
     IMU_DATA.accel[AX_X] = gVec[AX_X];
     IMU_DATA.accel[AX_Y] = gVec[AX_Y];
@@ -822,10 +833,10 @@ inline float GetImuVelocity(uint8_t axis) { return IMU_DATA.gyro[axis]; }
   */
 inline float GetImuAccel(uint8_t axis) { return IMU_DATA.accel[axis]; }
 /**
-  * @brief          获取yaw零飘修正值
-  * @retval         (rad/s) yaw零飘修正值
+ * @brief          获取当前使用的 yaw 陀螺仪零偏
+ * @retval         (rad/s) yaw 陀螺仪零偏
   */
-float GetYawBias(void) { return IMU_DATA.gyro[AX_Z]; }
+float GetYawBias(void) { return INS.GyroBias[AX_Z]; }
 
 float get_raw_accel(uint8_t axis)
 {

@@ -37,7 +37,7 @@ clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = '';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\轮足\单片机\matlab\读取测试\test0914_2';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';
@@ -52,10 +52,10 @@ cfg.excitationAbsTol  = 1e-4;   % N*m，excitation 通道视为零的阈值
 cfg.ampRelTol         = 0.15;   % 激励幅值与期望值的相对偏差容限
 
 % ---- 以下激励参数必须与 system_identification_param.h 保持一致 ----
-cfg.ampExpected = [0.2, 0.2, 0.1, 0.1, 0.1];  % 右髋 左髋 右轮 左轮 尾巴 (N*m)
+cfg.ampExpected = [0.1, 0, 0, 0, 0];  % 右髋 左髋 右轮 左轮 尾巴 (N*m)
 cfg.sweepF0 = 0.2;              % chirp 起始频率 Hz
 cfg.sweepF1 = 20.0;             % chirp 终止频率 Hz
-cfg.sweepT  = 60.0;             % chirp 时长 s
+cfg.sweepT  = 240.0;             % chirp 时长 s
 cfg.prbsHoldS = 10 * 0.002;     % PRBS 码元保持时间 s (BIT_HOLD_SAMPLES * 2ms)
 
 cfg.minPreSec  = 5.0;     % 激励前稳态段最短长度，用于估计工作点

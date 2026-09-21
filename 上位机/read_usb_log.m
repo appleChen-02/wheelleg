@@ -6,7 +6,7 @@ function log = read_usb_log(logDir, playbackSpeed, timeRange)
 %   log = read_usb_log("C:\\path\\to\\log")
 %   log = read_usb_log("C:\\path\\to\\log", 2.0)  % 2x playback speed
 %   log = read_usb_log("C:\\path\\to\\log", 1.0, [0 90])  % time window in seconds
-%
+%   log = read_usb_log("C:\\Users\\0\\Desktop\\轮足\\单片机\\matlab\\读取测试\\test0909_1")
 % The script expects the Python logger output files in the directory:
 %   - imu.csv
 %   - robot_motion.csv

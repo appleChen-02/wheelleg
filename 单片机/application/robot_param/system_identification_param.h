@@ -79,7 +79,7 @@
 #define SYS_ID_EXCITATION_ENABLE        0U
 
 // 激励类型只能选择上面三个常量之一。DISABLED与将ENABLE设为0的效果相同。
-#define SYS_ID_EXCITATION_MODE          SYS_ID_EXCITATION_SINE_SWEEP
+#define SYS_ID_EXCITATION_MODE          SYS_ID_EXCITATION_DISABLED
 
 // 七位输入掩码，置1的通道施加激励，置0的通道保持纯控制器输出：
 // bit0=右髋Tp，bit1=左髋Tp，bit2=右轮T，bit3=左轮T，bit4=尾巴Tt，
@@ -87,7 +87,7 @@
 // 常用示例：0x01=仅右髋，0x02=仅左髋，0x04=仅右轮，0x08=仅左轮，
 //           0x10=仅尾巴，0x20=仅左腿轴向力，0x40=仅右腿轴向力，
 //           0x0C=双轮，0x03=双髋，0x60=双腿轴向力，0x1F=原五通道同时激励。
-#define SYS_ID_EXCITATION_INPUT_MASK    0x1FU
+#define SYS_ID_EXCITATION_INPUT_MASK    0x01U
 
 /*-------------------- Sine sweep --------------------*/
 // 当前实现是线性chirp：瞬时频率在DURATION内从START_FREQ线性变化到END_FREQ。
@@ -97,7 +97,7 @@
 // 因此正弦扫频建议一次只开启一个通道，多输入同时辨识优先使用独立PRBS。
 #define SYS_ID_SINE_SWEEP_START_FREQ   (0.2f)  // 扫频起始频率，Hz，必须>=0
 #define SYS_ID_SINE_SWEEP_END_FREQ     (20.0f) // 扫频终止频率，Hz，应低于250Hz奈奎斯特频率
-#define SYS_ID_SINE_SWEEP_DURATION     (60.0f) // 从起始频率扫到终止频率所需时间，s，必须>0
+#define SYS_ID_SINE_SWEEP_DURATION     (240.0f) // 从起始频率扫到终止频率所需时间，s，必须>0
 
 /*-------------------- PRBS --------------------*/
 // PRBS在 +amplitude 与 -amplitude 之间切换，进入辨识模式后持续生成，不自动停止。
@@ -121,7 +121,7 @@
 // 激励先叠加到5维LQR广义力矩，再将髋力矩通过VMC映射为四个关节电机力矩。
 // 这些值不是最终实体电机力矩，最终指令仍可能被VMC关系和电机限幅改变。
 // 建议从当前值或更小值开始，逐通道观察姿态、速度、电机反馈力矩和饱和情况。
-#define SYS_ID_EXCITATION_AMP_RIGHT_HIP   (0.2f) // 右髋虚拟力矩激励峰值，N*m
+#define SYS_ID_EXCITATION_AMP_RIGHT_HIP   (0.1f) // 右髋虚拟力矩激励峰值，N*m
 #define SYS_ID_EXCITATION_AMP_LEFT_HIP    (0.2f) // 左髋虚拟力矩激励峰值，N*m
 #define SYS_ID_EXCITATION_AMP_RIGHT_WHEEL (0.1f) // 右轮力矩激励峰值，N*m
 #define SYS_ID_EXCITATION_AMP_LEFT_WHEEL  (0.1f) // 左轮力矩激励峰值，N*m
@@ -130,3 +130,4 @@
 #define SYS_ID_EXCITATION_AMP_RIGHT_LEG_FORCE (2.0f) // 右腿轴向力激励峰值，N
 
 #endif  // SYSTEM_IDENTIFICATION_PARAM_H
+

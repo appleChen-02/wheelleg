@@ -21,7 +21,7 @@ Features:
     使用 `--realtime-mode` 选择输出方式：
     - append: 逐行追加输出（默认）。
     - latest: 在终端底部维护“最新快照区”，每次只更新该区域，不清空历史输出。
-
+python3 usb_data_logger.py --port /dev/ttyACM0 --baud 115200 --outdir ./log
 示例（中文）：
     #通常使用
     py usb_data_logger.py --port COM10 --baud 115200 --realtime --realtime-mode latest --save-mat --outdir ./log
@@ -804,15 +804,28 @@ def auto_pick_port() -> str:
     return ports[0]
 
 
+def format_elapsed(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 def run(args: argparse.Namespace) -> int:
     sink = CsvSink(args.outdir)
     parser = FrameParser()
     latest_display = LatestSnapshotDisplay(args)
 
+    start_wall_time = time.time()
+    start_monotonic = time.monotonic()
     print(f"[INFO] Open serial: {args.port}, baud={args.baud}")
     print(f"[INFO] Output dir : {args.outdir}")
+    print(
+        f"[INFO] Start time : {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_wall_time))}"
+    )
+    print(f"[INFO] Elapsed    : {format_elapsed(0)}")
 
-    t0 = time.time()
+    t0 = start_monotonic
     next_flush_t = t0 + max(float(args.flush_interval), 0.0)
 
     try:
@@ -948,11 +961,11 @@ def run(args: argparse.Namespace) -> int:
                             )
 
                 # 定时刷新到磁盘，避免每秒边界时高频重复 flush。
-                if args.flush_interval > 0 and time.time() >= next_flush_t:
+                if args.flush_interval > 0 and time.monotonic() >= next_flush_t:
                     sink.flush()
                     next_flush_t += float(args.flush_interval)
 
-                if args.duration > 0 and (time.time() - t0) >= args.duration:
+                if args.duration > 0 and (time.monotonic() - t0) >= args.duration:
                     print("[INFO] Reached duration limit, stopping.")
                     break
 
@@ -966,6 +979,12 @@ def run(args: argparse.Namespace) -> int:
         print("\n[INFO] Stopped by user.")
     finally:
         sink.close()
+        end_wall_time = time.time()
+        elapsed = time.monotonic() - start_monotonic
+        print(
+            f"[INFO] End time   : {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end_wall_time))}"
+        )
+        print(f"[INFO] Total time : {format_elapsed(elapsed)}")
 
     print(
         "[INFO] Stats: "

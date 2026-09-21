@@ -53,6 +53,9 @@ extern INS_t INS;
 
 void IMU_QuaternionEKF_Init(float process_noise1, float process_noise2, float measure_noise, float lambda);
 void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, float az, float dt);
+void IMU_YawBiasCalibrationUpdate(float gx, float gy, float gz,
+                                  float ax, float ay, float az, float dt);
+uint8_t IMU_YawBiasCalibrationIsReady(void);
 void gEstimateKF_Init(float process_noise, float measure_noise);
 void gEstimateKF_Update(float gx, float gy, float gz, float ax, float ay, float az, float dt);
 

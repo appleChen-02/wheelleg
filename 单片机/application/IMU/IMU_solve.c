@@ -25,11 +25,18 @@
 */
 
 #include "IMU_solve.h"
+#include "math.h"
 #include "stdbool.h"
 #include "robot_param.h"
 
 #define TRUE 1
 #define FALSE 0
+
+// 启动时 yaw 陀螺仪零偏校准参数。
+#define YAW_BIAS_CALIBRATION_TIME_S       (5.0f)
+#define YAW_BIAS_CALIBRATION_GYRO_MAX    (0.05f)  // (rad/s) 静止时三轴角速度上限
+#define YAW_BIAS_CALIBRATION_ACCEL_TOL   (0.50f)  // (m/s^2) 加速度模长允许偏差
+#define YAW_BIAS_CALIBRATION_GRAVITY     (9.81f)  // (m/s^2) 标准重力加速度
 
 /*******************************************************************************/
 /* 欧拉角解算需要用到的变量                                                      */
@@ -73,6 +80,12 @@ float IMU_QuaternionEKF_H[36] = {1, 0, 0, 0, 0, 0,
 // clang-format on
 
 INS_t INS = {0};
+
+// yaw 零偏运行时状态。校准完成后在本次上电期间保持不变。
+static float yaw_bias_runtime = __GYRO_BIAS_YAW;
+static float yaw_bias_sum = 0.0f;
+static float yaw_bias_calibration_time = 0.0f;
+static bool yaw_bias_calibration_ready = false;
 
 /*******************************************************************************/
 /* 加速度解算需要用到的变量                                                      */
@@ -360,6 +373,12 @@ void gEstimateKF_Update(float gx, float gy, float gz, float ax, float ay, float 
  */
 void IMU_QuaternionEKF_Init(float process_noise1, float process_noise2, float measure_noise, float lambda)
 {
+    // 每次 IMU 初始化都重新估计 yaw 零偏，固定参数仅作为校准完成前的临时值。
+    yaw_bias_runtime = __GYRO_BIAS_YAW;
+    yaw_bias_sum = 0.0f;
+    yaw_bias_calibration_time = 0.0f;
+    yaw_bias_calibration_ready = false;
+
     INS.Q1 = process_noise1;
     INS.Q2 = process_noise2;
     INS.R = measure_noise;
@@ -379,10 +398,58 @@ void IMU_QuaternionEKF_Init(float process_noise1, float process_noise2, float me
     INS.IMU_QuaternionEKF.User_Func3_f = IMU_QuaternionEKF_xhatUpdate;
     INS.IMU_QuaternionEKF.SkipEq3 = TRUE;
     INS.IMU_QuaternionEKF.SkipEq4 = TRUE;
+    INS.GyroBias[2] = yaw_bias_runtime;
     memcpy(INS.IMU_QuaternionEKF.F_data, IMU_QuaternionEKF_F, sizeof(IMU_QuaternionEKF_F));
     memcpy(INS.IMU_QuaternionEKF.P_data, IMU_QuaternionEKF_P, sizeof(IMU_QuaternionEKF_P));
     memcpy(INS.IMU_QuaternionEKF.Q_data, IMU_QuaternionEKF_Q, sizeof(IMU_QuaternionEKF_Q));
     memcpy(INS.IMU_QuaternionEKF.R_data, IMU_QuaternionEKF_R, sizeof(IMU_QuaternionEKF_R));
+}
+
+/**
+ * @brief  启动静止阶段估计 yaw 陀螺仪零偏
+ * @param[in] gx, gy, gz 经过传感器安装方向变换后的角速度，单位 rad/s
+ * @param[in] ax, ay, az 原始加速度，单位 m/s^2
+ * @param[in] dt          本次采样周期，单位 s
+ * @note   只有连续满足静止条件达到指定时间后，才会锁存 yaw 零偏。
+ */
+void IMU_YawBiasCalibrationUpdate(float gx, float gy, float gz,
+                                  float ax, float ay, float az, float dt)
+{
+    if (yaw_bias_calibration_ready) return;
+
+    const float accel_norm = sqrtf(ax * ax + ay * ay + az * az);
+    const bool valid_stationary_sample =
+        isfinite(gx) && isfinite(gy) && isfinite(gz) &&
+        isfinite(ax) && isfinite(ay) && isfinite(az) &&
+        isfinite(accel_norm) && isfinite(dt) && (dt > 0.0f) &&
+        (fabsf(gx) <= YAW_BIAS_CALIBRATION_GYRO_MAX) &&
+        (fabsf(gy) <= YAW_BIAS_CALIBRATION_GYRO_MAX) &&
+        (fabsf(gz) <= YAW_BIAS_CALIBRATION_GYRO_MAX) &&
+        (fabsf(accel_norm - YAW_BIAS_CALIBRATION_GRAVITY) <=
+         YAW_BIAS_CALIBRATION_ACCEL_TOL);
+
+    if (!valid_stationary_sample) {
+        // 发生运动、振动或数据异常时，必须重新累计连续静止时间。
+        yaw_bias_sum = 0.0f;
+        yaw_bias_calibration_time = 0.0f;
+        return;
+    }
+
+    // 按时间加权累计 gyro_z，兼容实际采样周期的轻微波动。
+    yaw_bias_sum += gz * dt;
+    yaw_bias_calibration_time += dt;
+
+    if (yaw_bias_calibration_time < YAW_BIAS_CALIBRATION_TIME_S) return;
+
+    // 静止期间 gyro_z 的平均值就是当前温度下的 yaw 角速度零偏。
+    yaw_bias_runtime = yaw_bias_sum / yaw_bias_calibration_time;
+    INS.GyroBias[2] = yaw_bias_runtime;
+    yaw_bias_calibration_ready = true;
+}
+
+uint8_t IMU_YawBiasCalibrationIsReady(void)
+{
+    return yaw_bias_calibration_ready ? 1U : 0U;
 }
 
 /**
@@ -404,6 +471,9 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     30    31    32    33    34    35
     */
     INS.dt = dt;
+
+    // 校准完成后使用实际测得的 yaw 零偏，避免每个周期被固定参数覆盖。
+    INS.GyroBias[2] = yaw_bias_runtime;
 
     halfgxdt = 0.5f * (gx - INS.GyroBias[0]) * dt;
     halfgydt = 0.5f * (gy - INS.GyroBias[1]) * dt;
@@ -472,7 +542,7 @@ void IMU_QuaternionEKF_Update(float gx, float gy, float gz, float ax, float ay, 
     INS.q[3] = INS.IMU_QuaternionEKF.FilteredValue[3];
     INS.GyroBias[0] = INS.IMU_QuaternionEKF.FilteredValue[4];
     INS.GyroBias[1] = INS.IMU_QuaternionEKF.FilteredValue[5];
-    INS.GyroBias[2] = __GYRO_BIAS_YAW; // 陀螺仪yaw零飘，单位rad/s(在参数文件中配置)
+    // INS.GyroBias[2] 已在预测前使用运行时校准值，这里不再写回固定参数。
 
     // 四元数反解欧拉角
     INS.angle[0] = atan2f(2.0f * (INS.q[0] * INS.q[1] + INS.q[2] * INS.q[3]), 2.0f * (INS.q[0] * INS.q[0] + INS.q[3] * INS.q[3]) - 1.0f);

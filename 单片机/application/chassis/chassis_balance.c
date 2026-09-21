@@ -71,6 +71,15 @@ static float RL_PD_DEBUG_OUT = 0.0f;
 // Parameters on ---------------------
 #define MS_TO_S 0.001f
 
+// X 轴速度零偏校准：启动后需要连续获得 5 秒有效静止数据。
+#define X_VELOCITY_BIAS_CALIBRATION_MS  5000U
+// 校准期间允许的速度和加速度范围，超出范围说明机器人没有保持静止。
+#define X_VELOCITY_CALIBRATION_SPEED_MAX (0.02f)
+#define X_VELOCITY_CALIBRATION_ACCEL_MAX (0.50f)
+// 速度死区采用滞回阈值，避免速度在零点附近反复跳变。
+#define X_VELOCITY_DEADZONE_ENTER       (0.0003f)
+#define X_VELOCITY_DEADZONE_EXIT        (0.0006f)
+
 #define VEL_PROCESS_NOISE 25   // 速度过程噪声
 #define VEL_MEASURE_NOISE 800  // 速度测量噪声
 // 同时估计加速度和速度时对加速度的噪声
@@ -114,6 +123,15 @@ static float RL_PD_DEBUG_OUT = 0.0f;
     }
 
 static Observer_t OBSERVER;
+
+// 速度零偏校准状态。校准完成后，x_velocity_bias 在本次上电期间保持不变。
+static float x_velocity_bias = 0.0f;
+static float x_velocity_bias_sum = 0.0f;
+static uint32_t x_velocity_bias_calibration_ms = 0U;
+static uint32_t x_velocity_bias_sample_count = 0U;
+static bool x_velocity_bias_ready = false;
+// true 表示当前速度被死区置零，false 表示允许速度通过。
+static bool x_velocity_deadzone_active = true;
 
 Chassis_s CHASSIS = {
     .mode = CHASSIS_OFF,
@@ -386,6 +404,15 @@ void ChassisInit(void)
     memcpy(OBSERVER.body.v_kf.Q_data, Q, sizeof(Q));
     memcpy(OBSERVER.body.v_kf.R_data, R, sizeof(R));
     memcpy(OBSERVER.body.v_kf.H_data, H, sizeof(H));
+
+    // 每次底盘初始化都重新进行速度零偏校准，避免沿用上一次运行的数据。
+    x_velocity_bias = 0.0f;
+    x_velocity_bias_sum = 0.0f;
+    x_velocity_bias_calibration_ms = 0U;
+    x_velocity_bias_sample_count = 0U;
+    x_velocity_bias_ready = false;
+    x_velocity_deadzone_active = true;
+    CHASSIS.last_time = xTaskGetTickCount();
 }
 
 /******************************************************************/
@@ -547,6 +574,50 @@ static void UpdateLegStatus(void);
 static void UpdateMotorStatus(void);
 static void UpdateStepStatus(void);
 static void BodyMotionObserve(void);
+
+static void UpdateXVelocityBiasCalibration(float speed, float raw_velocity, float acceleration)
+{
+    // 校准只执行一次；模式切换不会重新估计零偏。
+    if (x_velocity_bias_ready) return;
+
+    const uint32_t dt_ms = CHASSIS.duration;
+    // 只有传感器有效、所有底盘电机在线且速度/加速度足够小时，样本才有效。
+    const bool valid_stationary_sample =
+        (dt_ms > 0U) &&
+        isfinite(speed) &&
+        isfinite(raw_velocity) &&
+        isfinite(acceleration) &&
+        (ImuSnapshotIsReady() != 0) &&
+        ((g_motor_offline_mask & 0x3FU) == 0U) &&
+        (fabsf(speed) <= X_VELOCITY_CALIBRATION_SPEED_MAX) &&
+        (fabsf(acceleration) <= X_VELOCITY_CALIBRATION_ACCEL_MAX);
+
+    if (!valid_stationary_sample) {
+        // 出现运动或数据异常时，丢弃之前的样本，重新累计连续静止时间。
+        x_velocity_bias_sum = 0.0f;
+        x_velocity_bias_calibration_ms = 0U;
+        x_velocity_bias_sample_count = 0U;
+        return;
+    }
+
+    // 按实际采样时间加权累计，兼容任务周期的轻微抖动。
+    x_velocity_bias_sum += raw_velocity * (float)dt_ms;
+    x_velocity_bias_calibration_ms += dt_ms;
+    x_velocity_bias_sample_count++;
+
+    if (x_velocity_bias_calibration_ms < X_VELOCITY_BIAS_CALIBRATION_MS ||
+        x_velocity_bias_sample_count == 0U) {
+        return;
+    }
+
+    // 静止期间的平均速度就是本次上电的速度零偏。
+    x_velocity_bias = x_velocity_bias_sum /
+                      (float)x_velocity_bias_calibration_ms;
+    x_velocity_bias_ready = true;
+    x_velocity_deadzone_active = true;
+    // 清除校准等待期间的位移、速度和卡尔曼滤波器状态，再开始控制。
+    ResetXStateOnModeSwitch();
+}
 
 
 /**
@@ -853,8 +924,34 @@ static void BodyMotionObserve(void)
     OBSERVER.body.v_kf.F_data[1] = CHASSIS.duration * MS_TO_S;      // 更新采样时间
 
     Kalman_Filter_Update(&OBSERVER.body.v_kf);
-    CHASSIS.fdb.body.x_dot_obv = OBSERVER.body.v_kf.xhat_data[0];
+    // 先保存未经零偏修正的卡尔曼速度，校准阶段使用它估计零偏。
+    const float raw_velocity = OBSERVER.body.v_kf.xhat_data[0];
     CHASSIS.fdb.body.x_acc_obv = OBSERVER.body.v_kf.xhat_data[1];
+
+    UpdateXVelocityBiasCalibration(
+        speed, raw_velocity, CHASSIS.fdb.body.x_acc);
+
+    if (!x_velocity_bias_ready) {
+        // 零偏未估计完成前，禁止位移积分，并将反馈速度置零。
+        CHASSIS.fdb.body.x_dot_obv = 0.0f;
+        CHASSIS.fdb.body.x = 0.0f;
+        x_velocity_deadzone_active = true;
+    } else {
+        // 从卡尔曼速度中扣除启动阶段估计出的固定零偏。
+        float corrected_velocity = raw_velocity - x_velocity_bias;
+
+        // 进入死区使用较小阈值，退出死区使用较大阈值，形成速度滞回。
+        if (x_velocity_deadzone_active) {
+            if (fabsf(corrected_velocity) > X_VELOCITY_DEADZONE_EXIT) {
+                x_velocity_deadzone_active = false;
+            }
+        } else if (fabsf(corrected_velocity) < X_VELOCITY_DEADZONE_ENTER) {
+            x_velocity_deadzone_active = true;
+        }
+
+        if (x_velocity_deadzone_active) corrected_velocity = 0.0f;
+        CHASSIS.fdb.body.x_dot_obv = corrected_velocity;
+    }
 
     // 底盘速度向量用于对外输出和调试，统一在观测器里更新
     CHASSIS.fdb.speed_vector.vx = CHASSIS.fdb.body.x_dot_obv;
@@ -862,8 +959,10 @@ static void BodyMotionObserve(void)
     CHASSIS.fdb.speed_vector.wz = CHASSIS.fdb.body.yaw_dot;
 
     // 更新行驶距离
-    if (fabs(CHASSIS.ref.speed_vector.vx) < WHEEL_DEADZONE &&
-        fabs(CHASSIS.fdb.body.x_dot_obv) < 0.8f) {
+    // 保持原有逻辑：只有目标速度为零时才累计反馈位移。
+    if (x_velocity_bias_ready &&
+        fabsf(CHASSIS.ref.speed_vector.vx) < WHEEL_DEADZONE &&
+        fabsf(CHASSIS.fdb.body.x_dot_obv) < 0.8f) {
         // 当目标速度为0，且速度小于阈值时，计算反馈距离
         CHASSIS.fdb.body.x += CHASSIS.fdb.body.x_dot_obv * CHASSIS.duration * MS_TO_S;
     } else {
@@ -1704,6 +1803,12 @@ static void SystemIdentificationFinalizeSnapshot(void)
  */
 void ChassisConsole(void)
 {
+    // X 轴或 yaw 轴校准期间不执行平衡控制，防止未修正的反馈参与控制器计算。
+    if (!x_velocity_bias_ready || IMU_YawBiasCalibrationIsReady() == 0U) {
+        ConsoleZeroForce();
+        return;
+    }
+
     switch (CHASSIS.mode) {
         case CHASSIS_NOTAIL: {
             ConsoleNoTail();
@@ -2858,6 +2963,14 @@ static float RlPositionTorque(float q_des, float q_fdb, float dq_des, float dq_f
  */
 void ChassisSendCmd(void)
 {
+    // X 轴或 yaw 轴校准期间，即使模式已经切换，也强制向所有电机发送零力矩。
+    if (!x_velocity_bias_ready || IMU_YawBiasCalibrationIsReady() == 0U) {
+        RL_PD_DEBUG_VALID = false;
+        LkMultipleTorqueControl_MG6012(JOINT_CAN, 0, 0, 0, 0);
+        LkMultipleTorqueControl_MF9025_MG5010(WHEEL_CAN, 0, 0, 0, 0);
+        return;
+    }
+
     static bool last_rl_selected = false;
     const bool rl_selected = ChassisIsRlControlSelected();
 

@@ -1,4 +1,4 @@
-function analyze_sysid_no_excitation()
+function analyze_sysid_no_excitation(showFigures)
 %ANALYZE_SYSID_NO_EXCITATION 系统辨识模式（无激励）闭环稳态数据分析
 %
 % 数据来源：上位机 usb_data_logger.py 采集的
@@ -23,15 +23,27 @@ function analyze_sysid_no_excitation()
 %
 % 使用：把采集目录（含两个 csv）放到本脚本同目录的 data/ 下，
 % 或将 cfg.dataDir 指向该目录，然后运行 analyze_sysid_no_excitation
+%
+% 参数：
+%   showFigures = true（默认）运行结束后保留并弹出 5 个图窗，便于交互查看
+%                 false 只写 PNG 不弹窗（适合 matlab -batch / 无显示环境）
+%
+% 图窗：fig1 状态时域 / fig2 输入时域 / fig3 漂移 / fig4 PSD / fig5 相关性
+%       无论是否弹窗，PNG 都会照常写入 results/<时间戳>/
+
+if nargin < 1 || isempty(showFigures)
+    showFigures = true;
+end
 
 clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = 'C:\Users\0\Desktop\轮足\单片机\matlab\读取测试\test0910_1';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\轮足\单片机\matlab\读取测试\test0915_6';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';
+cfg.showFigures = showFigures;   % 运行结束后保留图窗（PNG 始终保存）
 
 cfg.tRange   = [];        % 手动截取 [t0 t1] (s, 相对首样本)；[] = 全部使用
 
@@ -228,6 +240,7 @@ MOTOR = [T12.J0_feedback_torque, T12.J1_feedback_torque, T12.J2_feedback_torque,
 S = S(useMask,:);  U = U(useMask,:);  C = C(useMask,:);  A = A(useMask,:);
 MOTOR = MOTOR(useMask,:);  EXC = EXC(useMask,:);
 SF = SF(useMask);  SAT = SAT(useMask);
+badStatus = badStatusMask(useMask);   % 同步按 useMask 截取，避免下面二次索引
 Sraw = S;                    % 保留原始角（未 unwrap），仅用于绘图和圆周统计
 n0 = nnz(useMask);
 
@@ -239,7 +252,7 @@ if nNonFinite > 0
 end
 
 % 最终有效样本掩码：剔除 NaN/离线/雅可比异常/饱和
-gMask = finiteMask & ~badStatusMask(useMask) & (SAT(useMask) == 0);
+gMask = finiteMask & ~badStatus & (SAT == 0);
 nGood = sum(gMask);
 if nGood < 100
     error('有效样本仅 %d 帧（剔除非有限值/异常状态/饱和后），不足以做统计，终止。', nGood);
@@ -550,7 +563,7 @@ fclose(fq);
 
 %% ============================== 绘图 ==============================
 % 图1: 12 个状态时域（灰=剔除样本，蓝=有效样本）
-fh1 = figure('Visible','off','Position',[40 40 1400 900]);
+fh1 = newFig(cfg.showFigures, [40 40 1400 900], 'fig1: state feedback');
 for k = 1:12
     subplot(4, 3, k);
     plot(t, Sraw(:,k), 'Color', [.75 .75 .75]); hold on;
@@ -563,7 +576,7 @@ sgtitle('State feedback (gray = excluded samples)', 'Interpreter', 'none');
 savefigPng(fh1, fullfile(outDir, 'fig1_states_time.png'));
 
 % 图2: 5 个输入通道（controller / command / actual）
-fh2 = figure('Visible','off','Position',[60 60 1400 900]);
+fh2 = newFig(cfg.showFigures, [60 60 1400 900], 'fig2: inputs');
 for k = 1:5
     subplot(3, 2, k);
     plot(tD, U(gMask,k), 'Color', [.1 .35 .75]); hold on;
@@ -574,14 +587,14 @@ for k = 1:5
     xlabel('t (s)');
 end
 subplot(3, 2, 6); axis off;
-text(0.1, 0.75, 'blue:   controller_output', 'Color', [.1 .35 .75]);
+text(0.1, 0.75, 'blue:   controller-output', 'Color', [.1 .35 .75]);
 text(0.1, 0.50, 'orange: command',            'Color', [.85 .5 .1]);
 text(0.1, 0.25, 'green:  actual',             'Color', [.2 .6 .2]);
 sgtitle('Generalized torque: LQR output vs command vs actual', 'Interpreter', 'none');
 savefigPng(fh2, fullfile(outDir, 'fig2_inputs_time.png'));
 
 % 图3: 漂移拟合
-fh3 = figure('Visible','off','Position',[80 80 1200 800]);
+fh3 = newFig(cfg.showFigures, [80 80 1200 800], 'fig3: drift');
 for kk = 1:numel(driftCurves)
     dc = driftCurves{kk};
     subplot(2, 2, kk);
@@ -596,7 +609,7 @@ sgtitle('Integral state drift: raw curve + linear trend', 'Interpreter', 'none')
 savefigPng(fh3, fullfile(outDir, 'fig3_drift.png'));
 
 % 图4: PSD
-fh4 = figure('Visible','off','Position',[100 100 1200 800]);
+fh4 = newFig(cfg.showFigures, [100 100 1200 800], 'fig4: PSD');
 subplot(2, 1, 1);
 for kk = 1:numel(psdCh)
     loglog(f(2:end), Pxx{kk}(2:end)); hold on;
@@ -617,7 +630,7 @@ legend(psdLabels(numel(psdCh)+1:end), 'Interpreter','none', 'Location','best');
 savefigPng(fh4, fullfile(outDir, 'fig4_psd.png'));
 
 % 图5: 相关矩阵
-fh5 = figure('Visible','off','Position',[120 120 1400 500]);
+fh5 = newFig(cfg.showFigures, [120 120 1400 500], 'fig5: correlation');
 subplot(1, 3, 1);
 imagesc(CorrX, [-1 1]); colorbar; axis square;
 xticks(1:12); xticklabels(stateNames); xtickangle(90);
@@ -692,6 +705,12 @@ if ~isempty(issues)
 end
 fprintf('============================================================\n');
 fprintf('全部结果已写入: %s\n', outDir);
+if cfg.showFigures
+    fprintf('已保留 %d 个图窗（fig1 状态时域 / fig2 输入时域 / fig3 漂移 / fig4 PSD / fig5 相关性），可直接缩放查看。\n', ...
+        numel(findall(0, 'Type', 'figure')));
+else
+    fprintf('图窗已关闭（showFigures=false）；PNG 见上述目录。\n');
+end
 
 end
 
@@ -931,11 +950,26 @@ Pxx = acc / nseg;
 f = (0:Nfft/2)' * fs / Nfft;
 end
 
+function fh = newFig(show, pos, name)
+% 统一创建图窗：show=true 时可见（运行结束后保留，便于交互查看），
+% show=false 时离屏创建，仅用于导出 PNG
+if show
+    vis = 'on';
+else
+    vis = 'off';
+end
+fh = figure('Visible', vis, 'Position', pos, 'Name', name, 'NumberTitle', 'off');
+end
+
 function savefigPng(fh, fname)
+% 保存 PNG；图窗若为可见状态（showFigures=true）则保留，否则保存后关闭
+keepOpen = isgraphics(fh) && strcmp(get(fh, 'Visible'), 'on');
 try
     exportgraphics(fh, fname, 'Resolution', 150);
 catch
     print(fh, fname, '-dpng', '-r150');
 end
-close(fh);
+if ~keepOpen
+    close(fh);
+end
 end
