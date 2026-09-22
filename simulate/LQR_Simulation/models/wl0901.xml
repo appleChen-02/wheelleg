@@ -1,0 +1,150 @@
+<mujoco model="wl0901">
+  <compiler angle="radian"/>
+
+  <asset>
+    <mesh name="wlbody" file="wlbody.STL"/>
+    <mesh name="left_thigh" file="left_thigh.STL"/>
+    <mesh name="left_calf" file="left_calf.STL"/>
+    <mesh name="left_wheel" file="left_wheel.STL"/>
+    <mesh name="left_parallel_1" file="left_parallel_1.STL"/>
+    <mesh name="left_parallel_2" file="left_parallel_2.STL"/>
+    <mesh name="left_parallel_3" file="left_parallel_3.STL"/>
+    <mesh name="left_parallel_4" file="left_parallel_4.STL"/>
+    <mesh name="right_thigh" file="right_thigh.STL"/>
+    <mesh name="right_calf" file="right_calf.STL"/>
+    <mesh name="right_wheel" file="right_wheel.STL"/>
+    <mesh name="right_parallel_1" file="right_parallel_1.STL"/>
+    <mesh name="right_parallel_2" file="right_parallel_2.STL"/>
+    <mesh name="right_parallel_3" file="right_parallel_3.STL"/>
+    <mesh name="right_parallel_4" file="right_parallel_4.STL"/>
+    <mesh name="front_leg" file="front_leg.STL"/>
+    <mesh name="front_wheel" file="front_wheel.STL"/>
+  </asset>
+
+  <worldbody>
+    <body name="wlbody" pos="0 0 0.3">
+      <inertial pos="-0.006538 0.000240 -0.003808" mass="6.355" fullinertia="0.051899343 0.053298338 0.077555411 0.000243114 0.000419453 0.000069896"/>
+      <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="wlbody"/>
+      <freejoint name="robot_body_joint"/>
+    <body name="left_thigh" pos="0 0.09205 0">
+      <inertial pos="-0.142809 0.00141 0.003708" quat="0.540116 0.456012 0.529984 0.468449" mass="0.503" diaginertia="0.00343524 0.0034298 0.000243077"/>
+      <joint name="left_hip_joint" pos="0 0 0" axis="0 1 0"/>
+      <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="left_thigh"/>
+      <body name="left_calf" pos="-0.215 0 1e-05">
+        <inertial pos="0.177504 0.016075 -0.119701" quat="0.323473 0.594609 0.638687 0.365902" mass="1.26" diaginertia="0.0113765 0.0112388 0.000585746"/>
+        <joint name="left_knee_joint" pos="0 0 0" axis="0 1 0"/>
+        <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="left_calf"/>
+        <body name="left_wheel" pos="0.215 0 -0.14261">
+          <inertial pos="3e-06 0.104298 4e-06" quat="0.673778 0.214588 0.214532 0.67376" mass="0.852" diaginertia="0.00659062 0.00370025 0.00370015"/>
+          <joint name="left_podarthrum_joint" pos="0 0 0" axis="0 1 0"/>
+          <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="left_wheel"/>
+        </body>
+      </body>
+    </body>
+    <body name="left_parallel_1" pos="0 0.09205 0">
+      <inertial pos="0.053127 0.000355 0.004457" quat="0.501248 0.509737 0.493374 0.49548" mass="0.139" diaginertia="0.000285945 0.000261748 2.80732e-05"/>
+      <joint name="left_parallel_1_joint" pos="0 0 0" axis="0 1 0"/>
+      <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="left_parallel_1"/>
+      <body name="left_parallel_2" pos="0.098 0 1e-05">
+        <inertial pos="-0.049187 0.009419 -0.035676" quat="0.248184 0.450451 0.149718 0.844443" mass="0.063" diaginertia="0.000141823 0.000140862 3.99336e-06"/>
+        <joint name="left_parallel_2_joint" pos="0 0 0" axis="0 1 0"/>
+        <geom type="mesh" contype="1" conaffinity="0" rgba="0.898039 0.917647 0.929412 1" mesh="left_parallel_2"/>
+        <body name="left_parallel_3" pos="-0.098 0 -0.06501">
+          <inertial pos="-0.083803 0.000471 0.063532" quat="0.299422 0.640854 0.638952 0.302312" mass="0.066" diaginertia="0.000263026 0.000258328 6.58899e-06"/>
+          <joint name="left_parallel_3_joint" pos="0 0 0" axis="0 1 0"/>
+          <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="left_parallel_3"/>
+          <body name="left_parallel_4" pos="-0.14169 0 0.11448">
+            <inertial pos="-0.073346 0.009011 4e-06" quat="-0.0263811 0.706619 0.0267573 0.706596" mass="0.07" diaginertia="0.000140893 0.000140004 4.28764e-06"/>
+            <joint name="left_parallel_4_joint" pos="0 0 0" axis="0 1 0"/>
+            <geom type="mesh" contype="1" conaffinity="0" rgba="0.898039 0.917647 0.929412 1" mesh="left_parallel_4"/>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="right_thigh" pos="0 -0.09205 0">
+      <inertial pos="-0.142809 -0.001387 0.003708" quat="0.465551 0.532345 0.453254 0.542616" mass="0.503" diaginertia="0.00343526 0.00342982 0.000243113"/>
+      <joint name="right_hip_joint" pos="0 0 0" axis="0 1 0"/>
+      <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="right_thigh"/>
+      <body name="right_calf" pos="-0.215 0 1e-05">
+        <inertial pos="0.177503 -0.016075 -0.119704" quat="0.384865 0.617552 0.606637 0.320155" mass="1.26" diaginertia="0.0113808 0.0107098 0.00111042"/>
+        <joint name="right_knee_joint" pos="0 0 0" axis="0 1 0"/>
+        <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="right_calf"/>
+        <body name="right_wheel" pos="0.215 0 -0.14261">
+          <inertial pos="5e-06 -0.104298 -2e-06" quat="0.391794 0.588607 0.58864 0.391844" mass="0.852" diaginertia="0.00659062 0.00370025 0.00370015"/>
+          <joint name="right_podarthrum_joint" pos="0 0 0" axis="0 1 0"/>
+          <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="right_wheel"/>
+        </body>
+      </body>
+    </body>
+    <body name="right_parallel_1" pos="0 -0.09205 0">
+      <inertial pos="0.053127 -0.000355 0.004457" quat="0.495481 0.493373 0.509736 0.501249" mass="0.139" diaginertia="0.000285945 0.00026175 2.80712e-05"/>
+      <joint name="right_parallel_1_joint" pos="0 0 0" axis="0 1 0"/>
+      <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="right_parallel_1"/>
+      <body name="right_parallel_2" pos="0.098 0 -1e-05">
+        <inertial pos="-0.049187 -0.009266 -0.035676" quat="-0.223904 0.453933 -0.138956 0.851178" mass="0.063" diaginertia="0.000141983 0.000140917 4.13908e-06"/>
+        <joint name="right_parallel_2_joint" pos="0 0 0" axis="0 1 0"/>
+        <geom type="mesh" contype="1" conaffinity="0" rgba="0.898039 0.917647 0.929412 1" mesh="right_parallel_2"/>
+        <body name="right_parallel_3" pos="-0.098 0 -0.06501">
+          <inertial pos="-0.083803 0.000729 0.063532" quat="0.302312 0.638952 0.640854 0.299422" mass="0.066" diaginertia="0.000263026 0.000258328 6.58899e-06"/>
+          <joint name="right_parallel_3_joint" pos="0 0 0" axis="0 1 0"/>
+          <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="right_parallel_3"/>
+          <body name="right_parallel_4" pos="-0.14169 0 0.11448">
+            <inertial pos="-0.073346 -0.009011 4e-06" quat="0.026351 0.706615 -0.0267873 0.7066" mass="0.07" diaginertia="0.000140892 0.000140004 4.28764e-06"/>
+            <joint name="right_parallel_4_joint" pos="0 0 0" axis="0 1 0"/>
+            <geom type="mesh" contype="1" conaffinity="0" rgba="0.898039 0.917647 0.929412 1" mesh="right_parallel_4"/>
+          </body>
+        </body>
+      </body>
+    </body>
+    <body name="front_leg" pos="0.07125 -0.00375 -0.1105">
+      <inertial pos="0.164547 0.000922 -0.004265" quat="0.508146 0.516082 0.491328 0.483781" mass="0.671" diaginertia="0.00290053 0.00238077 0.000917338"/>
+      <joint name="front_hip_joint" pos="0 0 0" axis="0 1 0" range="-1.5 2" actuatorfrcrange="-10 10"/>
+      <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="front_leg"/>
+      <body name="front_wheel" pos="0.22173 0 -0.09184">
+        <inertial pos="0 0 0" quat="0.5 0.5 0.5 0.5" mass="0.06" diaginertia="2.461e-05 1.4369e-05 1.4368e-05"/>
+        <joint name="front_podarthrum_joint" pos="0 0 0" axis="0 1 0"/>
+        <geom type="mesh" contype="1" conaffinity="0" rgba="0.752941 0.752941 0.752941 1" mesh="front_wheel"/>
+      </body>
+    </body>
+    </body>
+  </worldbody>
+  <equality>
+    <!-- 左侧连接1 -->
+    <connect name="left_connect_1" body1="left_thigh" body2="left_parallel_3" 
+            anchor="-0.09800 0 0" solref="-10000 -10" solimp="0.99 0.999 0.00001 0.5 2"/>
+    <!-- 左侧连接2 -->
+    <connect name="left_connect_2" body1="left_calf" body2="left_parallel_4" 
+            anchor="-0.04368 0 0.04947" solref="-10000 -10" solimp="0.99 0.999 0.00001 0.5 2"/>
+    <!-- 右侧连接1 -->
+    <connect name="right_connect_1" body1="right_thigh" body2="right_parallel_3" 
+            anchor="-0.09800 0 0" solref="-10000 -10" solimp="0.99 0.999 0.00001 0.5 2"/>
+    <!-- 右侧连接2 -->
+    <connect name="right_connect_2" body1="right_calf" body2="right_parallel_4" 
+            anchor="-0.04368 0 0.04947" solref="-10000 -10" solimp="0.99 0.999 0.00001 0.5 2"/>
+  </equality>
+
+  <actuator>
+    <motor name="left_hip_motor" joint="left_hip_joint"
+           ctrllimited="true" ctrlrange="-40 40"
+           forcelimited="true" forcerange="-40 40" gear="1"/>
+    <motor name="left_parallel_1_motor" joint="left_parallel_1_joint"
+           ctrllimited="true" ctrlrange="-40 40"
+           forcelimited="true" forcerange="-40 40" gear="1"/>
+    <motor name="right_hip_motor" joint="right_hip_joint"
+           ctrllimited="true" ctrlrange="-40 40"
+           forcelimited="true" forcerange="-40 40" gear="1"/>
+    <motor name="right_parallel_1_motor" joint="right_parallel_1_joint"
+           ctrllimited="true" ctrlrange="-40 40"
+           forcelimited="true" forcerange="-40 40" gear="1"/>
+    <motor name="left_podarthrum_motor" joint="left_podarthrum_joint"
+           ctrllimited="true" ctrlrange="-4.5 4.5"
+           forcelimited="true" forcerange="-4.5 4.5" gear="1"/>
+    <motor name="right_podarthrum_motor" joint="right_podarthrum_joint"
+           ctrllimited="true" ctrlrange="-4.5 4.5"
+           forcelimited="true" forcerange="-4.5 4.5" gear="1"/>
+    <motor name="front_hip_motor" joint="front_hip_joint"
+           ctrllimited="true" ctrlrange="-7 7"
+           forcelimited="true" forcerange="-7 7" gear="1"/>
+  </actuator>
+
+</mujoco>
