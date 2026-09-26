@@ -1,5 +1,5 @@
 function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePosition)
-%PLOT_THEORETICAL_BODE 绘制 LQR 闭环理论 Bode 图（固定腿长 0.17 m）
+%PLOT_THEORETICAL_BODE 绘制 LQR 闭环理论 Bode 图
 %
 % 理论闭环模型：
 %   控制律: u = -K (x - r)
@@ -34,6 +34,9 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
 
     %% ---- 参数解析：支持多种输入方式 ----
     sourceFile = '';
+    leg_length_val = NaN;
+    lqr_Q = [];
+    lqr_R = [];
     if nargin == 0
         % 无参数：自动查找最新的 lqr_linear_model_*.mat
         files = dir('lqr_linear_model_*.mat');
@@ -47,6 +50,9 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             K     = ld.K;
             lqr_Q = ld.lqr_Q;
             lqr_R = ld.lqr_R;
+            if isfield(ld, 'leg_length_val')
+                leg_length_val = ld.leg_length_val;
+            end
 
         else
             % 回退到 workspace
@@ -71,6 +77,9 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
             K     = ld.K;
             lqr_Q = ld.lqr_Q;
             lqr_R = ld.lqr_R;
+            if isfield(ld, 'leg_length_val')
+                leg_length_val = ld.leg_length_val;
+            end
         end
     end
 
@@ -83,8 +92,19 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
         A_num = evalin('base', 'A_num');
         B_num = evalin('base', 'B_num');
         K     = evalin('base', 'K');
-        lqr_Q = ld.lqr_Q;
-        lqr_R = ld.lqr_R;
+        if evalin('base', 'exist(''lqr_Q'',''var'')')
+            lqr_Q = evalin('base', 'lqr_Q');
+        else
+            lqr_Q = eye(size(A_num, 1));
+        end
+        if evalin('base', 'exist(''lqr_R'',''var'')')
+            lqr_R = evalin('base', 'lqr_R');
+        else
+            lqr_R = eye(size(B_num, 2));
+        end
+        if evalin('base', 'exist(''leg_length_val'',''var'')')
+            leg_length_val = evalin('base', 'leg_length_val');
+        end
     end
 
     if nargin < 4 || isempty(Fs)
@@ -92,6 +112,11 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
     end
     if nargin < 5 || isempty(figurePosition)
         figurePosition = [100, 100, 1800, 900];
+    end
+    if isfinite(leg_length_val)
+        legLabel = sprintf('l=%.3f m', leg_length_val);
+    else
+        legLabel = 'l=unknown';
     end
     fprintf('Q矩阵 (状态权重):\n');
     disp(lqr_Q);
@@ -206,6 +231,11 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
         struct('title', 'Attitude Tracking  —  Theoretical (LQR closed-loop, l=0.17 m)');
         struct('title', 'Leg & Tail Tracking —  Theoretical (LQR closed-loop, l=0.17 m)');
     };
+
+    % 新版模型文件保存了目标腿长；旧文件则显示为 unknown。
+    for g = 1:3
+        groupDefs{g}.title = strrep(groupDefs{g}.title, 'l=0.17 m', legLabel);
+    end
 
     for g = 1:3
         groupChs = {};

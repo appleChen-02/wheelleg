@@ -37,6 +37,7 @@ bool g_zero_gravity = false;
 bool g_control_enabled = false;
 bool g_control_output_enabled = true;
 bool g_reset_state_reader = false;
+bool g_reset_display_pending = false;
 double g_manual_yaw_offset = 0.0;
 int g_tp_impulse_count = 0;
 double g_stable_accum = 0.0;
@@ -45,6 +46,9 @@ double g_next_print_time = 0.0;
 double g_print_period = kDefaultPrintPeriod;
 ControlCommand g_last_command;
 RobotState g_last_state;
+std::vector<double> g_initial_qpos;
+std::vector<double> g_initial_qvel;
+std::array<double, 3> g_initial_gravity{};
 
 bool g_mouse_left = false;
 bool g_mouse_middle = false;
@@ -97,38 +101,49 @@ void SelectInitialState(const mjModel* model) {
 }
 
 void ApplyInitialState(mjModel* model, mjData* data) {
-    if (model->nkey > 0) {
-        mj_resetDataKeyframe(model, data, 0);
-    } else {
-        mj_resetData(model, data);
-        const int body_joint = mj_name2id(model, mjOBJ_JOINT, "robot_body_joint");
-        if (body_joint >= 0) {
-            const double theta = kInitialThetaDeg * mjPI / 180.0;
-            const int adr = model->jnt_qposadr[body_joint];
-            data->qpos[adr + 3] = std::cos(theta * 0.5);
-            data->qpos[adr + 4] = 0.0;
-            data->qpos[adr + 5] = std::sin(theta * 0.5);
-            data->qpos[adr + 6] = 0.0;
-        }
-    }
+    // Always restore MuJoCo's XML default qpos/qvel. Keyframes are not used
+    // for startup or reset, and no extra initial tilt is injected.
+    mj_resetData(model, data);
     mj_forward(model, data);
+}
+
+void CaptureInitialState(const mjModel* model, const mjData* data) {
+    g_initial_qpos.assign(data->qpos, data->qpos + model->nq);
+    g_initial_qvel.assign(data->qvel, data->qvel + model->nv);
+    for (int i = 0; i < 3; ++i) g_initial_gravity[i] = model->opt.gravity[i];
+}
+
+void RestoreInitialState() {
+    if (!g_model || !g_data || g_initial_qpos.size() != static_cast<size_t>(g_model->nq) ||
+        g_initial_qvel.size() != static_cast<size_t>(g_model->nv)) {
+        return;
+    }
+    mj_resetData(g_model, g_data);
+    std::copy(g_initial_qpos.begin(), g_initial_qpos.end(), g_data->qpos);
+    std::copy(g_initial_qvel.begin(), g_initial_qvel.end(), g_data->qvel);
+    for (int i = 0; i < 3; ++i) g_model->opt.gravity[i] = g_initial_gravity[i];
+    mj_forward(g_model, g_data);
 }
 
 void ResetSimulation() {
     if (!g_model || !g_data) return;
-    ApplyInitialState(g_model, g_data);
+    RestoreInitialState();
     g_data->time = 0.0;
-    g_paused = false;
-    g_control_enabled = false;
-    g_control_output_enabled = true;
+    // Hold one rendered frame at the exact XML-default pose before control
+    // resumes, so the reset state is observable before the first LQR step.
+    g_paused = true;
+    g_control_enabled = true;
+    g_control_output_enabled = false;
     g_reset_state_reader = true;
-    g_stable_accum = 0.0;
+    g_reset_display_pending = true;
+    g_stable_accum = kStableRequired;
     g_next_control_time = 0.0;
     g_next_print_time = g_print_period;
     g_manual_yaw_offset = 0.0;
     g_tp_impulse_count = 0;
     g_last_command = {};
     g_last_state = {};
+    if (g_controller) g_controller->Reset();
     g_fps = 0.0;
     g_frame_counter = 0;
     g_fps_window_start = std::chrono::steady_clock::now();
@@ -257,7 +272,7 @@ int main(int argc, char** argv) {
     double pulse_duration = kDefaultPulseDuration;
     double render_fps = kDefaultRenderFps;
     double duration = kDefaultDuration;
-    ControlMode start_mode = ControlMode::Tripod;
+    ControlMode start_mode = ControlMode::Bipedal;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
@@ -339,12 +354,15 @@ int main(int argc, char** argv) {
         RobotMap map = MakeDefaultRobotMap();
         ResolveRobotMap(model, &map);
         ApplyInitialState(model, data);
+        CaptureInitialState(model, data);
         mj_forward(model, data);
 
         StateReader state_reader;
         BalanceController controller;
         controller.SetMode(start_mode);
         g_controller = &controller;
+        g_control_enabled = true;
+        g_stable_accum = kStableRequired;
         const int pulse_index = pulse_actuator.empty() ? -1 : FindActuatorByName(map, pulse_actuator);
         if (!pulse_actuator.empty() && pulse_index < 0) {
             throw std::runtime_error("Unknown actuator for --pulse: " + pulse_actuator);
@@ -356,16 +374,14 @@ int main(int argc, char** argv) {
         double next_render_time = data->time;
 
         while (!glfwWindowShouldClose(window) && (duration <= 0.0 || data->time < duration)) {
+            bool render_reset_frame = false;
             if (g_reset_state_reader) {
                 state_reader.Reset();
                 g_reset_state_reader = false;
             }
-
-            if (!g_paused && !g_control_enabled && data->time >= kInitialDelay) {
-                const RobotState check = state_reader.Read(data, map, kControlPeriod);
-                const double metric = std::fabs(check.body.pitch_rate) + std::fabs(check.body.x_dot);
-                g_stable_accum = metric < kStableVelThreshold ? g_stable_accum + kControlPeriod : 0.0;
-                if (g_stable_accum >= kStableRequired) g_control_enabled = true;
+            if (g_reset_display_pending) {
+                g_reset_display_pending = false;
+                render_reset_frame = true;
             }
 
             if (!g_paused && data->time + 1e-12 >= g_next_control_time) {
@@ -436,6 +452,12 @@ int main(int argc, char** argv) {
                 }
                 glfwSwapBuffers(window);
                 next_render_time = data->time + render_period;
+                if (render_reset_frame) {
+                    g_paused = false;
+                    g_control_output_enabled = true;
+                    g_control_enabled = true;
+                    g_next_control_time = data->time;
+                }
             }
             glfwPollEvents();
         }

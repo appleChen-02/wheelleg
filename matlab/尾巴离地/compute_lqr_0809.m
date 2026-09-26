@@ -44,7 +44,6 @@ R_w_val = 0.386 / 2;  % 轮距/2 (m)
 m_b_val = 6.9;            % 机体质量 (kg)
 I_b_val = 59035.925e-6;            % 机体俯仰转动惯量 (kg·m²)
 l_body_com_val = 4.3e-3;            % 机体质心到俯仰轴距离 (m)
-I_yaw_val = 294272.34e-6;          % 整体yaw轴转动惯量 (kg·m²)
 theta_b0_val = 0;           % 质心偏移角度 (rad)
 
 % ==================== 轮子参数 ====================
@@ -53,17 +52,26 @@ m_wr_val = 0.823;            % 右轮质量 (kg)
 I_wl_val = 6311.798e-6;     % 左轮转动惯量 (kg·m²)
 I_wr_val = 6311.798e-6;     % 右轮转动惯量 (kg·m²)
 
-% ==================== 腿部参数 (默认腿长 0.17m) ====================
-l_l_val = 0.17;             % 左腿长度 (m)
-l_r_val = 0.17;             % 右腿长度 (m)
+% ==================== 腿部参数 ====================
+% 只需修改该变量，即可生成指定腿长对应的 A_num、B_num 和 K。
+leg_length_val = 0.30;      % 目标腿长 (m)
+l_l_val = leg_length_val;   % 左腿长度 (m)
+l_r_val = leg_length_val;   % 右腿长度 (m)
 m_l_val = 2.2;             % 左腿质量 (kg)
 m_r_val = 2.2;             % 右腿质量 (kg)
-I_l_val = 0.034231929;           % 左腿转动惯量 (kg·m²)
-I_r_val = 0.034231929;           % 右腿转动惯量 (kg·m²)
-l_leg_l_com_val = 0.10157;  % 左腿质心到轮轴距离 (m)
-l_leg_r_com_val = 0.10157;  % 右腿质心到轮轴距离 (m)
-theta_l0_val = 0.582108261;  % 左腿偏移角度 (rad)
-theta_r0_val = 0.582108261;  % 右腿偏移角度 (rad)
+I_l_val = -0.3588*leg_length_val^4 + 0.3595*leg_length_val^3 + ...
+           0.0659*leg_length_val^2 + 0.0318*leg_length_val + 0.0255;
+I_r_val = I_l_val;           % 右腿转动惯量 (kg·m²)
+l_leg_l_com_val = 1.4205*leg_length_val^4 - 2.0644*leg_length_val^3 + ...
+                  1.2526*leg_length_val^2 - 0.059*leg_length_val + 0.0844;
+l_leg_r_com_val = l_leg_l_com_val;  % 右腿质心到轮轴距离 (m)
+theta_l0_val = 277.69*leg_length_val^4 - 304.33*leg_length_val^3 + ...
+               130.52*leg_length_val^2 - 27.562*leg_length_val + 2.7591;
+theta_r0_val = theta_l0_val; % 右腿偏移角度 (rad)
+
+% 整体 yaw 惯量也使用已有腿长拟合关系。
+I_yaw_val = -6.4624*leg_length_val^4 + 6.7339*leg_length_val^3 - ...
+            3.0029*leg_length_val^2 + 0.5202*leg_length_val + 0.2758;
 
 % ==================== 尾巴参数 v1.0 ====================
 % m_t_val = 0.87;                 % 尾巴质量 (kg)
@@ -619,7 +627,7 @@ ld_fun     = @(x) 1.4205*x.^4 - 2.0644*x.^3 + 1.2526*x.^2 - 0.059*x + 0.0844;
 Ileg_fun   = @(x) -0.3588*x.^4 + 0.3595*x.^3 + 0.0659*x.^2 + 0.0318*x + 0.0255;
 
 % 单点 LQR 是默认工作流。二维拟合会计算 961 个模型，按需显式开启。
-enable_fitting = true;
+enable_fitting = false;  % 当前只生成 leg_length_val 对应的一组 A/B/K
 
 if enable_fitting
     if exist('fsolve', 'file') ~= 2
@@ -1061,12 +1069,13 @@ if ~isempty(K)
     saveName = sprintf('%s_%d.mat', baseName, idx);
 
     if enable_fitting
-        save(saveName, 'A_num', 'B_num', 'K','lqr_Q','lqr_R','InputEq_Fit_Coefficients','K_Fit_Coefficients');
+        save(saveName, 'A_num', 'B_num', 'K','lqr_Q','lqr_R', ...
+             'leg_length_val', 'InputEq_Fit_Coefficients','K_Fit_Coefficients');
     else
-        save(saveName, 'A_num', 'B_num', 'K','lqr_Q','lqr_R');
+        save(saveName, 'A_num', 'B_num', 'K','lqr_Q','lqr_R','leg_length_val');
     end
 
-    save(saveName, 'A_num', 'B_num', 'K','lqr_Q','lqr_R');
     fprintf('✓ 线性化模型已保存: %s\n', saveName);
+    fprintf('  腿长: %.3f m\n', leg_length_val);
     fprintf('  包含: A_num (12×12), B_num (12×5), K (5×12)\n\n');
 end

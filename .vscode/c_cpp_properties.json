@@ -12,7 +12,9 @@
                 "${workspaceFolder}/单片机/Middlewares/Third_Party/FreeRTOS/Source/include",
                 "${workspaceFolder}/单片机/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS",
                 "${workspaceFolder}/单片机/Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F",
-                "D:/Keil_v5/ARM/ARMCC/include"
+                "D:/Keil_v5/ARM/ARMCC/include",
+                "D:/mujoco-3.13.0-windows-x86_64/include",
+                "D:/mujoco-3.13.0-windows-x86_64/glfw-3.5.1/include/GLFW"
             ],
             "browse": {
                 "path": [

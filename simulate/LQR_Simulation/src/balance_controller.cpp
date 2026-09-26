@@ -579,6 +579,17 @@ double BalanceController::speed_ref() const {
     return speed_ref_;
 }
 
+void BalanceController::Reset() {
+    for (auto& pid : leg_length_pid_) pid.Reset();
+    leg_coordination_pid_.Reset();
+    yaw_velocity_pid_.Reset();
+    tail_comp_pid_.Reset();
+    tail_up_pid_.Reset();
+    tail_z_pid_.Reset();
+    speed_ref_ = 0.0;
+    x_ref_ = 0.0;
+}
+
 ControlCommand BalanceController::Compute(const RobotState& state) {
     ControlCommand command;
 

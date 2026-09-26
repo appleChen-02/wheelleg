@@ -79,8 +79,8 @@ struct BalanceControllerConfig {
     double ff_ratio = 1.0;
     double tail_F_ff_ratio = kDefaultTripodTailFfRatio;
     double leg_length_kp = 600.0;
-    double leg_length_ki = 1750.0;
-    double leg_length_kd = 620.0;
+    double leg_length_ki = 0.7;
+    double leg_length_kd = 2000.0;
     double leg_length_max_output = 80.0;
     double leg_length_max_iout = 40.0;
 
@@ -128,6 +128,7 @@ public:
     // 设置前进速度目标 (m/s)，同时会重置积分的位置参考
     void SetSpeedRef(double v);
     double speed_ref() const;
+    void Reset();
 
 private:
     BalanceControllerConfig config_;

@@ -18,7 +18,7 @@ inline constexpr double kDefaultDuration = -1.0;
 inline constexpr double kInitialThetaDeg = 10.0;
 
 // 在启用控制前，载入模型后需至少等待此时长（秒）
-inline constexpr double kInitialDelay = 1.0;
+inline constexpr double kInitialDelay = 0.0;
 
 // 判断机器人“稳定”的速度阈值（m/s 或 rad/s）
 inline constexpr double kStableVelThreshold = 0.02;
