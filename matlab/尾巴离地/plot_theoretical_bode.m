@@ -174,6 +174,11 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
         data.group = chInfo.group;
         data.hasModel = (chInfo.state_idx > 0);
         data.state_idx = chInfo.state_idx;
+        data.gainMargin = NaN;
+        data.gainMargin_dB = NaN;
+        data.phaseMargin_deg = NaN;
+        data.gainMarginFreq_rad_s = NaN;
+        data.phaseMarginFreq_rad_s = NaN;
 
         if data.hasModel
             i = chInfo.state_idx;
@@ -197,6 +202,13 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
                 data.mag_dB = 20 * log10(max(abs(H), eps));
                 data.phase_deg = unwrap(angle(H)) * 180 / pi;
 
+                % Gain/phase margins of the modeled SISO transfer function.
+                [data.gainMargin, data.phaseMargin_deg, ...
+                    data.gainMarginFreq_rad_s, data.phaseMarginFreq_rad_s] = margin(sys_i);
+                if data.gainMargin > 0
+                    data.gainMargin_dB = 20 * log10(data.gainMargin);
+                end
+
                 % -3dB 带宽
                 idx_3dB = find(data.mag_dB <= -3, 1, 'first');
                 if ~isempty(idx_3dB) && idx_3dB > 1
@@ -213,9 +225,10 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
                     data.g0_dB = NaN;
                 end
 
-                fprintf('[Theory Bode] %-14s: G_0=%.1f dB, -3dB @ %s\n', ...
+                fprintf('[Theory Bode] %-14s: G_0=%.1f dB, -3dB @ %s, PM=%.2f deg, GM=%.2f dB\n', ...
                     data.name, data.g0_dB, ...
-                    condstr2(isfinite(data.bw_Hz), sprintf('%.2f Hz', data.bw_Hz), 'out of band'));
+                    condstr2(isfinite(data.bw_Hz), sprintf('%.2f Hz', data.bw_Hz), 'out of band'), ...
+                    data.phaseMargin_deg, data.gainMargin_dB);
             catch ME
                 warning('频道 %s 传函计算失败: %s', data.name, ME.message);
                 data.hasModel = false;
@@ -355,18 +368,42 @@ function theoretical_data = plot_theoretical_bode(A_num, B_num, K, Fs, figurePos
 
     %% ---- 打印汇总 ----
     fprintf('\n[Theory Bode] ====== 汇总 ======\n');
-    fprintf('%-14s  %-10s  %-12s  %s\n', 'Channel', 'G_0 (dB)', '-3dB (Hz)', 'Model?');
-    fprintf('%-14s  %-10s  %-12s  %s\n', '-------', '--------', '---------', '------');
+    fprintf('%-14s  %-10s  %-12s  %-10s  %-10s  %s\n', ...
+        'Channel', 'G_0 (dB)', '-3dB (Hz)', 'PM (deg)', 'GM (dB)', 'Model?');
+    fprintf('%-14s  %-10s  %-12s  %-10s  %-10s  %s\n', ...
+        '-------', '--------', '---------', '--------', '-------', '------');
     for ch = 1:nTotal
         data = theoretical_data.channels{ch};
         if data.hasModel
-            fprintf('%-14s  %8.2f     %-10s   ✓\n', data.name, data.g0_dB, ...
-                condstr2(isfinite(data.bw_Hz), sprintf('%.2f', data.bw_Hz), 'out-of-band'));
+            fprintf('%-14s  %8.2f     %-12s  %8.2f  %8.2f  %s\n', ...
+                data.name, data.g0_dB, ...
+                condstr2(isfinite(data.bw_Hz), sprintf('%.2f', data.bw_Hz), 'out-of-band'), ...
+                data.phaseMargin_deg, data.gainMargin_dB, 'yes');
         else
-            fprintf('%-14s  %-10s  %-12s  ✗ (not in sagittal LQR model)\n', data.name, '—', '—');
+            fprintf('%-14s  %-10s  %-12s  %-10s  %-10s  %s\n', ...
+                data.name, 'N/A', 'N/A', 'N/A', 'N/A', 'no');
         end
     end
     fprintf('========================================\n');
+
+    fprintf('\n[Theory Bode] ====== Stability Margins ======\n');
+    fprintf('%-14s  %-14s  %-14s  %-14s  %-14s\n', ...
+        'Channel', 'PM (deg)', 'PM freq (Hz)', 'GM (dB)', 'GM freq (Hz)');
+    fprintf('%-14s  %-14s  %-14s  %-14s  %-14s\n', ...
+        '-------', '-------', '------------', '-------', '------------');
+    for ch = 1:nTotal
+        data = theoretical_data.channels{ch};
+        if data.hasModel
+            fprintf('%-14s  %14.2f  %14.4g  %14.2f  %14.4g\n', ...
+                data.name, data.phaseMargin_deg, ...
+                data.phaseMarginFreq_rad_s / (2 * pi), data.gainMargin_dB, ...
+                data.gainMarginFreq_rad_s / (2 * pi));
+        else
+            fprintf('%-14s  %-14s  %-14s  %-14s  %-14s\n', ...
+                data.name, 'N/A', 'N/A', 'N/A', 'N/A');
+        end
+    end
+    fprintf('===============================================================\n');
 end
 
 function s = condstr2(condition, trueStr, falseStr)
