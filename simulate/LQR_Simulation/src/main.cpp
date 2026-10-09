@@ -1,20 +1,36 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
 #include <mujoco/mujoco.h>
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "balance_controller.h"
 #include "constants.h"
 #include "state_reader.h"
+#include "system_identification.h"
 
 #ifndef DEFAULT_MODEL_PATH
 #define DEFAULT_MODEL_PATH "models/scene.xml"
@@ -29,6 +45,18 @@ mjrContext g_context;
 mjModel* g_model = nullptr;
 mjData* g_data = nullptr;
 BalanceController* g_controller = nullptr;
+SystemIdentificationExperiment* g_sysid = nullptr;
+std::atomic<bool> g_stop_requested{false};
+static_assert(std::atomic<bool>::is_always_lock_free);
+
+void StopSignalHandler(int) { g_stop_requested.store(true, std::memory_order_relaxed); }
+#ifdef _WIN32
+BOOL WINAPI ConsoleStopHandler(DWORD event) {
+    if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) return FALSE;
+    g_stop_requested.store(true, std::memory_order_relaxed);
+    return TRUE;
+}
+#endif
 
 bool g_paused = false;
 bool g_show_help = true;
@@ -70,9 +98,27 @@ double ParseDouble(const std::string& text, double fallback) {
     }
 }
 
+std::filesystem::path ParseOutputPath(int index, const char* argument) {
+#ifdef _WIN32
+    // Windows 的窄 argv 可能是本地代码页；保存路径直接读取 Unicode 命令行。
+    int count = 0;
+    auto arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!arguments) throw std::runtime_error("Could not read Unicode command line");
+    std::filesystem::path result;
+    if (index < count) result = arguments[index];
+    LocalFree(arguments);
+    if (result.empty()) throw std::runtime_error("Missing output directory");
+    return result;
+#else
+    (void)index;
+    return std::filesystem::path(argument);
+#endif
+}
+
 ControlMode ParseControlMode(const std::string& text) {
     if (text == "notail" || text == "NoTail") return ControlMode::NoTail;
     if (text == "bipedal" || text == "Bipedal") return ControlMode::Bipedal;
+    if (text == "sysid" || text == "SystemIdentification") return ControlMode::SystemIdentification;
     if (text == "proxtripod" || text == "ProXTripod" || text == "proX") {
         return ControlMode::ProXTripod;
     }
@@ -171,6 +217,14 @@ void PrintStateSnapshot(double time, const RobotState& state, const ControlComma
 
 void FormatOverlay(char* left, size_t left_size, char* right, size_t right_size,
                    const BalanceController& controller) {
+    if (g_sysid) {
+        std::snprintf(left, left_size, "Mode\nPhase\nFeedback\nPitch\nTail\nLeg L / R\n\nEsc: stop and save\nP/Space: pause\nMotion/reset/output keys locked");
+        std::snprintf(right, right_size, "%s\n%s\n%s\n%+.3f rad\n%+.3f rad\n%.3f / %.3f m",
+                      controller.ModeName().c_str(), g_sysid->PhaseName(),
+                      g_feedback_source == FeedbackSource::Truth ? "truth" : "MCU observer",
+                      g_last_state.body.pitch, g_last_state.beta, g_last_state.left_leg.l0, g_last_state.right_leg.l0);
+        return;
+    }
     std::snprintf(left, left_size,
                   "LQR mode\nFPS\nFeedback\nSpeed cmd / ref\nYaw rate cmd\nYaw ref / actual\nLeg target L / R\nTail cmd / ref\nTail actual\n\nKeys\nW/S: move (hold)\nA/D: turn (hold)\nShift: slower\nQ/E: leg shorter/longer\nZ/C: tail angle -/+\nX: stop motion\nHome: neutral posture\nT: Tp disturbance\nM/N: mode\nP/Space: pause\nR: reset\nK: output\nG: gravity\nH: overlay\nEsc: exit\n\nMouse: drag/scroll");
     std::snprintf(right, right_size,
@@ -186,6 +240,7 @@ void FormatOverlay(char* left, size_t left_size, char* right, size_t right_size,
 }
 
 void UpdateKeyboardReferences(GLFWwindow* window, BalanceController& controller) {
+    if (controller.mode() == ControlMode::SystemIdentification) return;
     if (!window) return;
     if (!glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
         controller.StopMotion();
@@ -226,6 +281,10 @@ void KeyboardCallback(GLFWwindow* window, int key, int, int action, int) {
     }
     if (key == GLFW_KEY_H) {
         g_show_help = !g_show_help;
+        return;
+    }
+    if (g_sysid) {
+        // 数据采集中不允许运动、改工作点、重置时钟或插入额外扰动。
         return;
     }
     if (key == GLFW_KEY_K) {
@@ -315,6 +374,7 @@ int main(int argc, char** argv) {
     double initial_yaw_rate = 0.0;
     double initial_leg_length = 0.18;
     double initial_tail_angle = 0.0;
+    std::filesystem::path sysid_outdir;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
@@ -347,6 +407,10 @@ int main(int argc, char** argv) {
             g_zero_gravity = true;
         } else if (arg == "--mode" && i + 1 < argc) {
             start_mode = ParseControlMode(argv[++i]);
+        } else if (arg == "--outdir" && i + 1 < argc) {
+            ++i;
+            try { sysid_outdir = ParseOutputPath(i, argv[i]); }
+            catch (const std::exception& e) { std::cerr << "Invalid output path: " << e.what() << "\n"; return 1; }
         } else if (arg == "--pulse" && i + 2 < argc) {
             pulse_actuator = argv[++i];
             pulse_torque = ParseDouble(argv[++i], pulse_torque);
@@ -355,14 +419,47 @@ int main(int argc, char** argv) {
         } else if (arg == "--pulse-duration" && i + 1 < argc) {
             pulse_duration = ParseDouble(argv[++i], pulse_duration);
         } else if (arg == "--help") {
-            std::cout << "Usage: lqr_sim [--model path] [--duration seconds] [--mode notail|bipedal|tripod|proxtripod]\n"
+            std::cout << "Usage: lqr_sim [--model path] [--duration seconds] [--mode notail|bipedal|tripod|proxtripod|sysid]\n"
                          "                 [--render-fps hz] [--print-period seconds] [--console-output]\n"
                          "                 [--headless] [--feedback truth|mcu]\n"
                          "                 [--speed m/s] [--yaw-rate rad/s] [--leg-length m] [--tail-angle rad]\n"
-                         "                 [--zero-gravity] [--pulse actuator torque_nm]\n";
+                         "                 [--zero-gravity] [--pulse actuator torque_nm]\n"
+                         "                 [--outdir directory] (sysid CSV output)\n"
+                         "SYSID parameters: src/system_identification_param.h (rebuild after editing).\n"
+                         "SYSID: wait for stability, record baseline, excite, notify completion; stop with Esc / Ctrl+C to save.\n"
+                         "--duration is total simulation time; stopping early produces an incomplete capture.\n";
             return 0;
         }
     }
+
+    if (start_mode == ControlMode::SystemIdentification) {
+        if (g_zero_gravity || !pulse_actuator.empty() || initial_speed != 0.0 || initial_yaw_rate != 0.0 ||
+            initial_leg_length != 0.18 || initial_tail_angle != 0.0) {
+            std::cerr << "SYSID uses fixed references from system_identification_param.h; motion, posture, gravity and pulse overrides are not allowed.\n";
+            return 1;
+        }
+        if (sysid_outdir.empty()) {
+            const auto now = std::chrono::system_clock::now();
+            const auto epoch = std::chrono::system_clock::to_time_t(now);
+            char stamp[32] = {};
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", std::localtime(&epoch));
+            const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+            sysid_outdir = std::filesystem::path("logs") / (std::string("sysid_") + stamp + "_" + std::to_string(millis));
+        }
+    } else if (!sysid_outdir.empty()) {
+        std::cerr << "--outdir requires --mode sysid\n";
+        return 1;
+    }
+    std::signal(SIGINT, StopSignalHandler);
+    std::signal(SIGTERM, StopSignalHandler);
+#ifdef SIGBREAK
+    std::signal(SIGBREAK, StopSignalHandler);
+#endif
+#ifdef _WIN32
+    // 某些终端会继承“忽略 Ctrl+C”，显式恢复并安装 Windows 控制事件处理器。
+    SetConsoleCtrlHandler(nullptr, FALSE);
+    SetConsoleCtrlHandler(ConsoleStopHandler, TRUE);
+#endif
 
     model_path = ResolveModelPath(model_path);
     char error[1024] = {};
@@ -385,7 +482,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     g_data = data;
-    if (headless && duration <= 0.0) duration = 5.0;
+    if (headless && duration <= 0.0 && start_mode != ControlMode::SystemIdentification) duration = 5.0;
     GLFWwindow* window = nullptr;
     bool glfw_initialized = false;
     bool render_initialized = false;
@@ -435,6 +532,11 @@ int main(int argc, char** argv) {
             controller.SetTailAngleRef(initial_tail_angle);
         }
         g_controller = &controller;
+        std::unique_ptr<SystemIdentificationExperiment> sysid;
+        if (start_mode == ControlMode::SystemIdentification) {
+            sysid = std::make_unique<SystemIdentificationExperiment>(model, map, sysid_outdir, g_feedback_source);
+            g_sysid = sysid.get();
+        }
         g_control_enabled = true;
         std::cout << "Feedback: " << (g_feedback_source == FeedbackSource::Truth ? "truth" : "MCU observer (ideal zero bias)")
                   << "; physics=1 ms, control=2 ms; no startup calibration\n";
@@ -448,7 +550,8 @@ int main(int argc, char** argv) {
         const double render_period = 1.0 / std::max(1.0, render_fps);
         double next_render_time = data->time;
 
-        while ((!window || !glfwWindowShouldClose(window)) && (duration <= 0.0 || data->time < duration)) {
+        const auto run_wall_start = std::chrono::steady_clock::now();
+        while (!g_stop_requested && (!window || !glfwWindowShouldClose(window)) && (duration <= 0.0 || data->time < duration)) {
             bool render_reset_frame = false;
             if (g_reset_state_reader) {
                 state_reader.Reset();
@@ -463,12 +566,13 @@ int main(int argc, char** argv) {
                 render_reset_frame = true;
             }
 
-            if (!g_paused && data->time + 1e-12 >= g_next_control_time) {
+            if (!g_paused && data->time + 0.5 * kPhysicsPeriod >= g_next_control_time) {
                 ClearCtrl(model, data);
                 g_last_state = state_reader.Read(data, map, kControlPeriod);
                 if (g_control_enabled) {
                     UpdateKeyboardReferences(window, controller);
-                    g_last_command = controller.Compute(g_last_state);
+                    const auto excitation = sysid ? sysid->Advance(data->time, g_last_state) : std::array<double, 5>{};
+                    g_last_command = controller.Compute(g_last_state, excitation);
                     state_reader.SetSpeedReference(g_last_command.speed_ref);
 
                     if (pulse_index >= 0 && data->time >= pulse_start &&
@@ -498,13 +602,24 @@ int main(int argc, char** argv) {
                             ? std::clamp(g_last_command.actuator_torque[i], -limit, limit) : 0.0;
                         SetActuatorTorque(map, data, i, g_last_command.actuator_torque[i]);
                     }
+                    if (sysid) {
+                        // 当前 XML 是无动态纯力矩电机；同步计算本拍实际输出，避免记录上一拍 actuator_force。
+                        mj_fwdActuation(model, data);
+                        sysid->Record(data->time, g_last_state, g_last_command, data);
+                    }
                 }
-                g_next_control_time += kControlPeriod;
+                // 以整数控制拍确定下次时间，避免长实验累计浮点误差造成 1 ms 错位。
+                g_next_control_time = (std::llround(data->time / kControlPeriod) + 1) * kControlPeriod;
             }
 
             if (!g_paused) {
                 mj_step(model, data);
                 state_reader.UpdateImuRoll(data, map);
+                if (headless && sysid && duration <= 0.0) {
+                    // 手动停止的无窗口实验按实时运行，给操作者留出停止时间。
+                    std::this_thread::sleep_until(run_wall_start +
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(data->time)));
+                }
             }
 
             if (data->time + 1e-12 >= g_next_print_time) {
@@ -543,6 +658,14 @@ int main(int argc, char** argv) {
             if (window) glfwPollEvents();
         }
 
+        if (sysid) {
+            const std::string reason = g_stop_requested ? "signal" :
+                (window && glfwWindowShouldClose(window) ? "manual_window_stop" : "duration_limit");
+            sysid->Finish(reason);
+        }
+        g_sysid = nullptr;
+        g_controller = nullptr;
+
         if (render_initialized) {
             mjr_freeContext(&g_context);
             mjv_freeScene(&g_scene);
@@ -550,6 +673,8 @@ int main(int argc, char** argv) {
         if (window) glfwDestroyWindow(window);
         if (glfw_initialized) glfwTerminate();
     } catch (const std::exception& ex) {
+        g_sysid = nullptr;
+        g_controller = nullptr;
         std::cerr << "Error: " << ex.what() << "\n";
         if (render_initialized) {
             mjr_freeContext(&g_context);

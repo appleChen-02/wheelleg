@@ -611,6 +611,8 @@ std::string BalanceController::ModeName() const {
             return "Tripod";
         case ControlMode::ProXTripod:
             return "ProXTripod";
+        case ControlMode::SystemIdentification:
+            return "SystemIdentification";
         default:
             return "Tripod";
     }
@@ -633,6 +635,7 @@ void BalanceController::SetLegLengthRef(double length) {
 }
 
 double BalanceController::leg_length_ref() const {
+    if (mode_ == ControlMode::SystemIdentification) return config_.sys_id.reference[14];
     if (leg_length_command_ > 0.0) return leg_length_command_;
     switch (mode_) {
         case ControlMode::Bipedal: return config_.ref_leg_length_bipedal;
@@ -651,8 +654,11 @@ void BalanceController::StopMotion() {
     yaw_rate_command_ = 0.0;
 }
 
-ControlCommand BalanceController::Compute(const RobotState& state) {
+ControlCommand BalanceController::Compute(const RobotState& state, const std::array<double, 5>& excitation) {
     ControlCommand command;
+    const bool identifying = mode_ == ControlMode::SystemIdentification;
+    const bool bipedal = mode_ == ControlMode::Bipedal || identifying;
+    const auto& id_ref = config_.sys_id.reference;
 
     if (!reference_initialized_) {
         x_ref_ = state.body.x;
@@ -667,6 +673,13 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     yaw_ref_ = std::remainder(yaw_ref_ + yaw_rate_command_ * kControlPeriod,
                               2.0 * 3.14159265358979323846);
     tail_angle_ref_ += kTailReferenceAlpha * (tail_angle_command_ - tail_angle_ref_);
+    if (identifying) {
+        x_ref_ = id_ref[0];
+        speed_ref_ = id_ref[1];
+        yaw_ref_ = id_ref[2];
+        yaw_rate_command_ = id_ref[3];
+        tail_angle_ref_ = id_ref[10];
+    }
     command.x_ref = x_ref_;
     command.speed_ref = speed_ref_;
     command.yaw_ref = yaw_ref_;
@@ -678,14 +691,17 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     // ===== 腿长统一协调（roll 角 → 左右腿长差分配） =====
     double ref_l0_left = base_ref_l0;
     double ref_l0_right = base_ref_l0;
-    {
+    if (identifying) {
+        ref_l0_left = id_ref[14];
+        ref_l0_right = id_ref[16];
+    } else {
         const double raw_leg_diff = state.left_leg.l0 - state.right_leg.l0;
         filtered_leg_diff_ = (1.0 - kLegDiffLpfAlpha) * raw_leg_diff
                            + kLegDiffLpfAlpha * filtered_leg_diff_;
         const double roll_for_leg_coordination =
-            (mode_ == ControlMode::Bipedal) ? state.body.smooth_roll : state.body.roll;
+            bipedal ? state.body.smooth_roll : state.body.roll;
         double L_diff = CalcLegLengthDiff(filtered_leg_diff_, roll_for_leg_coordination, 0.0);
-        if (mode_ != ControlMode::Bipedal) {
+        if (!bipedal) {
             L_diff = -L_diff;
         }
         double delta_L0 = 0.0;
@@ -700,8 +716,10 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     // theta 平衡偏移（根据左右腿长）
     double theta_eq[3] = {0.0, 0.0, 0.0};       // NoTail/Bipedal 用
     double theta_eq_bp[4] = {0.0, 0.0, 0.0, 0.0}; // ProXTripod 用 (Bipedal 版)
-    if (mode_ == ControlMode::ProXTripod || mode_ == ControlMode::Bipedal) {
-        GetTheta_Pro_Bipedal(legs[0].l0, legs[1].l0, theta_eq_bp);
+    const double gain_l = identifying ? id_ref[14] : legs[0].l0;
+    const double gain_r = identifying ? id_ref[16] : legs[1].l0;
+    if (mode_ == ControlMode::ProXTripod || bipedal) {
+        GetTheta_Pro_Bipedal(gain_l, gain_r, theta_eq_bp);
     } else if (mode_ != ControlMode::Tripod) {
         GetTheta_Pro_NoTail(legs[0].l0, legs[1].l0, theta_eq);
     }
@@ -722,7 +740,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         command.ref_theta = ref_theta_tripod;
         command.ref_pitch = ref_pitch_tripod;
         command.ref_beta = ref_beta_tripod;
-    } else if (mode_ == ControlMode::Bipedal) {
+    } else if (bipedal) {
         // 腿角/pitch 附加参考为零；尾角经与 MCU 相同的低通处理。
         command.ref_theta = 0.0;
         command.ref_pitch = 0.0;
@@ -767,39 +785,56 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
 
     // === 最新 MCU Bipedal：机体级 5x12 LQR，一次计算左右腿、轮和尾巴输出 ===
     double bipedal_tail_torque = 0.0;
-    if (mode_ == ControlMode::Bipedal) {
+    if (bipedal) {
         double k_bp[5][12] = {{0}};
         double x_bp[12] = {
             state.body.x - x_ref_,
             state.body.x_dot - speed_ref_,
             std::remainder(state.body.yaw - yaw_ref_, 2.0 * 3.14159265358979323846),
             state.body.yaw_rate - yaw_rate_command_,
-            state.leg_state[0].theta - theta_eq_bp[0],
-            state.leg_state[0].theta_dot,
-            state.leg_state[1].theta - theta_eq_bp[1],
-            state.leg_state[1].theta_dot,
-            state.body.pitch,
-            state.body.pitch_rate,
+            state.leg_state[0].theta - theta_eq_bp[0] - (identifying ? id_ref[4] : 0.0),
+            state.leg_state[0].theta_dot - (identifying ? id_ref[5] : 0.0),
+            state.leg_state[1].theta - theta_eq_bp[1] - (identifying ? id_ref[6] : 0.0),
+            state.leg_state[1].theta_dot - (identifying ? id_ref[7] : 0.0),
+            state.body.pitch - (identifying ? id_ref[8] : 0.0),
+            state.body.pitch_rate - (identifying ? id_ref[9] : 0.0),
             state.beta - tail_angle_ref_,
-            state.dbeta,
+            state.dbeta - (identifying ? id_ref[11] : 0.0),
         };
         double output_bp[5] = {0};
-        GetK_Pro_Bipedal(legs[0].l0, legs[1].l0, k_bp);
-        GetT0_Pro_Bipedal(legs[0].l0, legs[1].l0, T0_eq);
+        GetK_Pro_Bipedal(gain_l, gain_r, k_bp);
+        GetT0_Pro_Bipedal(gain_l, gain_r, T0_eq);
         CalcLQR_Pro_Bipedal(k_bp, x_bp, output_bp);
 
-        command.vmc_Tp[0] = output_bp[1] + T0_eq[0];
-        command.vmc_Tp[1] = output_bp[0] + T0_eq[0];
-        wheel_torque[0] = output_bp[3];
-        wheel_torque[1] = output_bp[2];
-        bipedal_tail_torque = output_bp[4] + T0_eq[1];
+        std::copy_n(output_bp, 5, command.controller_output.begin());
+        command.equilibrium_input = {T0_eq[0], T0_eq[0], 0.0, 0.0, T0_eq[1], 0.0, 0.0};
+        command.excitation = identifying ? excitation : std::array<double, 5>{};
+        for (int i = 0; i < 5; ++i) {
+            command.generalized_command[i] = output_bp[i] + command.equilibrium_input[i] + command.excitation[i];
+        }
+        command.reference_state = identifying ? id_ref : std::array<double, 18>{};
+        command.reference_state[0] = x_ref_;
+        command.reference_state[1] = speed_ref_;
+        command.reference_state[2] = yaw_ref_;
+        command.reference_state[3] = yaw_rate_command_;
+        command.reference_state[4] += theta_eq_bp[0];
+        command.reference_state[6] += theta_eq_bp[1];
+        command.reference_state[10] = tail_angle_ref_;
+        command.reference_state[14] = ref_l0_left;
+        command.reference_state[16] = ref_l0_right;
+
+        command.vmc_Tp[0] = command.generalized_command[1];
+        command.vmc_Tp[1] = command.generalized_command[0];
+        wheel_torque[0] = command.generalized_command[3];
+        wheel_torque[1] = command.generalized_command[2];
+        bipedal_tail_torque = command.generalized_command[4];
     }
 
     // 第一阶段：LQR + 前馈 + 腿长PID，暂存 F 和 Tp
     for (int i = 0; i < 2; ++i) {
         const auto& leg_state = state.leg_state[i];
 
-        if (mode_ == ControlMode::ProXTripod || mode_ == ControlMode::Bipedal) {
+        if (mode_ == ControlMode::ProXTripod || bipedal) {
             // 机体级 LQR 已在循环外完成，此处仅处理 F_ff/F_pid。
         } else if (mode_ == ControlMode::Tripod) {
             // === Tripod 模式：3×8 LQR，状态含尾巴 beta/beta_dot ===
@@ -887,6 +922,8 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     // roll 角速度阻尼：左右腿力差分配（MCU ChassisSendCmd）
     command.vmc_F[0] -= roll_vel_limit_f;
     command.vmc_F[1] += roll_vel_limit_f;
+    command.equilibrium_input[5] = command.leg_length_F_ff[0];
+    command.equilibrium_input[6] = command.leg_length_F_ff[1];
 
     // ===== ProXTripod：尾巴 VMC（尾落地虚拟力控制） =====
     double tail_torque = 0.0;
@@ -987,12 +1024,12 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     }
 
     // ===== Bipedal：尾巴输出来自同一个 5x12 机体级 LQR =====
-    if (mode_ == ControlMode::Bipedal) {
+    if (bipedal) {
         tail_torque = bipedal_tail_torque;
     }
 
     // ===== 两腿 theta 协调（ProXTripod 4×9 LQR 自带独立跟踪，不需要此 PID） =====
-    if (mode_ != ControlMode::ProXTripod && mode_ != ControlMode::Bipedal) {
+    if (mode_ != ControlMode::ProXTripod && !bipedal) {
         double theta_diff = state.leg_state[1].theta - state.leg_state[0].theta;  // MCU: error = 设定(0)-反馈(θ_L-θ_R)
         double coord_out = leg_coordination_pid_.Compute(theta_diff);
         command.coord_out = coord_out;
@@ -1006,6 +1043,10 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     for (int i = 0; i < 2; ++i) {
         double joint_torque[2] = {0.0, 0.0};
         CalcVmc(command.vmc_F[i], command.vmc_Tp[i], legs[i].jacobian, joint_torque);
+
+        if (std::abs(joint_torque[0]) > config_.max_joint_torque) command.motor_saturation_mask |= 1U << (2 * i);
+        if (std::abs(joint_torque[1]) > config_.max_joint_torque) command.motor_saturation_mask |= 1U << (2 * i + 1);
+        if (std::abs(wheel_torque[i]) > config_.max_wheel_torque) command.motor_saturation_mask |= 1U << (4 + i);
 
         // 仿真采用 A 方案的力矩约束；模型侧仍保留同样的物理限幅。
         wheel_torque[i] = Clip(wheel_torque[i], config_.max_wheel_torque);
@@ -1027,7 +1068,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     }
 
     // ProXTripod/Bipedal 的机体级 LQR 已包含 yaw 反馈，不再叠加独立 PID。
-    if (mode_ != ControlMode::ProXTripod && mode_ != ControlMode::Bipedal) {
+    if (mode_ != ControlMode::ProXTripod && !bipedal) {
         const double yaw_target = yaw_rate_command_;
         const double yaw_error = yaw_target - state.body.yaw_rate;  // MCU: 设定-反馈
         const double yaw_pid_out = yaw_velocity_pid_.Compute(yaw_error);
@@ -1039,6 +1080,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         command.yaw_pid_out = 0.0;
     }
 
+    if (std::abs(tail_torque) > config_.max_tail_torque) command.motor_saturation_mask |= 0x40;
     command.actuator_torque[6] = Clip(tail_torque, config_.max_tail_torque);
 
     return command;

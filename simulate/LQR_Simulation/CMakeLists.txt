@@ -35,6 +35,7 @@ add_executable(${PROJECT_NAME}
     src/main.cpp
     src/balance_controller.cpp
     src/state_reader.cpp
+    src/system_identification.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -49,7 +50,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE opengl32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE opengl32 shell32)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${MUJOCO_DLL}"
@@ -59,3 +60,18 @@ endif()
 
 message(STATUS "MuJoCo root: ${MUJOCO_ROOT}")
 message(STATUS "GLFW source: ${GLFW_SOURCE_DIR}")
+
+option(LQR_BUILD_SYSID_TESTS "Build system identification integration checks" OFF)
+if(LQR_BUILD_SYSID_TESTS)
+    enable_testing()
+    add_executable(SysIdIntegration
+        tests/sysid_integration.cpp
+        src/balance_controller.cpp
+        src/state_reader.cpp
+        src/system_identification.cpp
+    )
+    target_include_directories(SysIdIntegration PRIVATE "${MUJOCO_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(SysIdIntegration PRIVATE "${MUJOCO_LIB}")
+    add_test(NAME sysid_integration COMMAND SysIdIntegration
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/scene.xml" "${CMAKE_BINARY_DIR}/sysid_tests")
+endif()

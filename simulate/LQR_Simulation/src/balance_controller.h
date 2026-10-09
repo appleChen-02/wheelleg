@@ -6,6 +6,7 @@
 
 #include "constants.h"
 #include "state_reader.h"
+#include "system_identification_param.h"
 
 // 控制模式枚举：无尾、双足、三足（或三组）等。
 enum class ControlMode {
@@ -13,10 +14,17 @@ enum class ControlMode {
     Bipedal = 1,
     Tripod = 2,
     ProXTripod = 3,
+    SystemIdentification = 4,
 };
 
 // 控制输出命令，包含所有致动器的目标力矩。
 struct ControlCommand {
+    std::array<double, 5> controller_output{};  // [Tp_R,Tp_L,T_R,T_L,T_tail]，限幅前
+    std::array<double, 5> excitation{};
+    std::array<double, 5> generalized_command{};
+    std::array<double, 7> equilibrium_input{};
+    std::array<double, 18> reference_state{};  // theta 已包含 theta_eq
+    std::uint8_t motor_saturation_mask = 0;
     std::array<double, 7> actuator_torque = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     std::array<double, 4> vmc_torque = {0.0, 0.0, 0.0, 0.0};  // [L_phi1, L_phi4, R_phi1, R_phi4]
     std::array<double, 2> vmc_F = {0.0, 0.0};    // [L, R] radial force
@@ -69,6 +77,7 @@ struct PidState {
 
 // 控制器可配置参数集合（质量、重力、最大力矩和尾巴控制增益等）。
 struct BalanceControllerConfig {
+    SystemIdentificationParameters sys_id{};
     double body_mass = kDefaultBodyMass;
     double gravity = kDefaultGravity;
     double max_joint_torque = kDefaultMaxJointTorque;
@@ -136,7 +145,7 @@ public:
     void Reset();
     ControlMode mode() const;
     std::string ModeName() const;
-    ControlCommand Compute(const RobotState& state);
+    ControlCommand Compute(const RobotState& state, const std::array<double, 5>& excitation = {});
 
     // 设置前进速度目标 (m/s)。位置参考像 MCU 一样保持连续。
     void SetSpeedRef(double v);
