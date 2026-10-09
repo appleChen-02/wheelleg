@@ -110,14 +110,18 @@ void CalcMPC(const double MPC_k[2][6], const double delta_x[6], double* delta_Tp
 // theta1: 目标roll角 (rad)
 // 返回: 两腿长度期望差值 (m)
 double CalcLegLengthDiff(double Ld0, double theta0, double theta1) {
+    const double roll_error = theta0 - theta1;
+    if (roll_error > -kChassisRollDeadband && roll_error < kChassisRollDeadband) {
+        theta0 = theta1;
+    }
     return kWheelBase * std::tan(theta1) -
            std::cos(theta0) / std::cos(theta1) * (kWheelBase * std::tan(theta0) - Ld0);
 }
 
 // 双腿腿长协调控制：将期望差值对称分配到左右腿目标，并限幅
 void CoordinateLegLength(double* Ll_ref, double* Lr_ref, double diff, double add) {
-    *Ll_ref = *Ll_ref + diff * 0.5 + add;
-    *Lr_ref = *Lr_ref - diff * 0.5 - add;
+    *Ll_ref = *Ll_ref - diff * 0.5 - add;
+    *Lr_ref = *Lr_ref + diff * 0.5 + add;
 
     double* short_leg = (*Ll_ref < *Lr_ref) ? Ll_ref : Lr_ref;
     double* long_leg  = (*Ll_ref < *Lr_ref) ? Lr_ref : Ll_ref;
@@ -475,43 +479,49 @@ void CalcLQR_Pro_Bipedal(const double k[5][12], const double x[12], double outpu
 
 }  // namespace
 
-double PidState::Compute(double error, double dt) {
-    if (!initialized) {
-        error_hist[0] = error;
-        error_hist[1] = error;
-        error_hist[2] = error;
-        initialized = true;
-    }
-
-    // 推移误差历史
+double PidState::Compute(double error, bool clear_integral) {
+    // 与 MCU PID_calc/PID_calc_Leg 一致：初值是 0，首拍保留误差跃变。
     error_hist[2] = error_hist[1];
     error_hist[1] = error_hist[0];
     error_hist[0] = error;
 
-    integral += error * dt;
-    integral = Clip(integral, max_iout / std::max(ki, 1e-9));
+    if (error_deadband_low < error_hist[0] && error_hist[0] < error_deadband_up) {
+        error_hist[0] = 0.0;
+    }
 
-    // MCU 风格二阶差分 D 项：d²e/dt²，不对微分项滤波，不做 dt 除法
-    double d_term = kd * (error_hist[0] - 2.0 * error_hist[1] + error_hist[2]);
+    if (error_hist[0] > error_sum_low && error_hist[0] < error_sum_up) {
+        iout += ki * error_hist[0];
+    } else if (reset_iout_outside_range) {
+        iout = 0.0;
+    }
+    if (clear_integral) {
+        iout = 0.0;
+    }
 
-    double output = kp * error + ki * integral + d_term;
-    output = Clip(output, max_output);
+    dbuf[2] = dbuf[1];
+    dbuf[1] = dbuf[0];
+    dbuf[0] = n * dbuf[1] + (1.0 - n) * (error_hist[0] - error_hist[1]);
 
-    return output;
+    iout = Clip(iout, max_iout);
+    return Clip(kp * error_hist[0] + iout + kd * dbuf[0], max_output);
 }
 
 void PidState::Reset() {
-    integral = 0.0;
+    iout = 0.0;
+    dbuf[0] = dbuf[1] = dbuf[2] = 0.0;
     error_hist[0] = error_hist[1] = error_hist[2] = 0.0;
-    initialized = false;
 }
 
 BalanceController::BalanceController(BalanceControllerConfig config)
     : config_(config) {
     for (int i = 0; i < 2; ++i) {
-        leg_length_pid_[i].kp = config.leg_length_kp;
-        leg_length_pid_[i].ki = config.leg_length_ki;
-        leg_length_pid_[i].kd = config.leg_length_kd;
+        leg_length_pid_[i].kp = config.leg_length_kp[i];
+        leg_length_pid_[i].ki = config.leg_length_ki[i];
+        leg_length_pid_[i].kd = config.leg_length_kd[i];
+        leg_length_pid_[i].n = config.leg_length_n[i];
+        leg_length_pid_[i].error_sum_low = -config.leg_length_error_sum_limit[i];
+        leg_length_pid_[i].error_sum_up = config.leg_length_error_sum_limit[i];
+        leg_length_pid_[i].reset_iout_outside_range = false;
         leg_length_pid_[i].max_output = config.leg_length_max_output;
         leg_length_pid_[i].max_iout = config.leg_length_max_iout;
     }
@@ -519,36 +529,72 @@ BalanceController::BalanceController(BalanceControllerConfig config)
     leg_coordination_pid_.kp = config.leg_coord_kp;
     leg_coordination_pid_.ki = config.leg_coord_ki;
     leg_coordination_pid_.kd = config.leg_coord_kd;
+    leg_coordination_pid_.n = 0.0;
     leg_coordination_pid_.max_output = config.leg_coord_max_output;
     leg_coordination_pid_.max_iout = config.leg_coord_max_iout;
 
     yaw_velocity_pid_.kp = config.yaw_velocity_kp;
     yaw_velocity_pid_.ki = config.yaw_velocity_ki;
     yaw_velocity_pid_.kd = config.yaw_velocity_kd;
+    yaw_velocity_pid_.n = 0.0;
     yaw_velocity_pid_.max_output = config.yaw_velocity_max_output;
     yaw_velocity_pid_.max_iout = config.yaw_velocity_max_iout;
 
     tail_comp_pid_.kp = config.tail_comp_kp;
     tail_comp_pid_.ki = config.tail_comp_ki;
     tail_comp_pid_.kd = config.tail_comp_kd;
+    tail_comp_pid_.n = 0.0;
     tail_comp_pid_.max_output = config.tail_comp_max_output;
     tail_comp_pid_.max_iout = config.tail_comp_max_iout;
 
     tail_up_pid_.kp = config.proX_tail_up_kp;
     tail_up_pid_.ki = config.proX_tail_up_ki;
     tail_up_pid_.kd = config.proX_tail_up_kd;
+    tail_up_pid_.n = 0.1;
     tail_up_pid_.max_output = config.proX_tail_up_max_output;
     tail_up_pid_.max_iout = config.proX_tail_up_max_iout;
 
     tail_z_pid_.kp = config.proX_tail_z_kp;
     tail_z_pid_.ki = config.proX_tail_z_ki;
     tail_z_pid_.kd = config.proX_tail_z_kd;
+    tail_z_pid_.n = 0.1;
     tail_z_pid_.max_output = config.proX_tail_z_max_output;
     tail_z_pid_.max_iout = config.proX_tail_z_max_iout;
 }
 
 void BalanceController::SetMode(ControlMode mode) {
+    if (mode_ == mode) {
+        return;
+    }
+    // MCU active-mode switch clears x/PID state but keeps the Reference vx LPF
+    // continuous. Preserve both raw command and filtered reference here.
+    const double saved_speed_command = speed_command_;
+    const double saved_speed_reference = speed_ref_;
+    const double saved_leg_diff = filtered_leg_diff_;
     mode_ = mode;
+    Reset();
+    speed_command_ = saved_speed_command;
+    speed_ref_ = saved_speed_reference;
+    filtered_leg_diff_ = saved_leg_diff;
+}
+
+void BalanceController::Reset() {
+    speed_command_ = 0.0;
+    speed_ref_ = 0.0;
+    x_ref_ = 0.0;
+    filtered_leg_diff_ = 0.0;
+    yaw_rate_command_ = 0.0;
+    yaw_ref_ = 0.0;
+    leg_length_command_ = 0.0;
+    tail_angle_command_ = 0.0;
+    tail_angle_ref_ = 0.0;
+    reference_initialized_ = false;
+    for (auto& pid : leg_length_pid_) pid.Reset();
+    leg_coordination_pid_.Reset();
+    yaw_velocity_pid_.Reset();
+    tail_comp_pid_.Reset();
+    tail_up_pid_.Reset();
+    tail_z_pid_.Reset();
 }
 
 ControlMode BalanceController::mode() const {
@@ -571,44 +617,74 @@ std::string BalanceController::ModeName() const {
 }
 
 void BalanceController::SetSpeedRef(double v) {
-    speed_ref_ = v;
-    x_ref_ = 0.0;
+    speed_command_ = Clip(v, kMaxSpeedReference);
 }
 
 double BalanceController::speed_ref() const {
-    return speed_ref_;
+    return speed_command_;
 }
 
-void BalanceController::Reset() {
-    for (auto& pid : leg_length_pid_) pid.Reset();
-    leg_coordination_pid_.Reset();
-    yaw_velocity_pid_.Reset();
-    tail_comp_pid_.Reset();
-    tail_up_pid_.Reset();
-    tail_z_pid_.Reset();
-    speed_ref_ = 0.0;
-    x_ref_ = 0.0;
+void BalanceController::SetYawRateRef(double rate) {
+    yaw_rate_command_ = Clip(rate, kMaxYawRateReference);
+}
+
+void BalanceController::SetLegLengthRef(double length) {
+    leg_length_command_ = std::clamp(length, kMinLegLength, kMaxLegLength);
+}
+
+double BalanceController::leg_length_ref() const {
+    if (leg_length_command_ > 0.0) return leg_length_command_;
+    switch (mode_) {
+        case ControlMode::Bipedal: return config_.ref_leg_length_bipedal;
+        case ControlMode::Tripod: return config_.ref_leg_length_tripod;
+        case ControlMode::ProXTripod: return config_.ref_leg_length_proX;
+        default: return config_.ref_leg_length_default;
+    }
+}
+
+void BalanceController::SetTailAngleRef(double angle) {
+    tail_angle_command_ = std::clamp(angle, kMinTailReference, kMaxTailReference);
+}
+
+void BalanceController::StopMotion() {
+    speed_command_ = 0.0;
+    yaw_rate_command_ = 0.0;
 }
 
 ControlCommand BalanceController::Compute(const RobotState& state) {
     ControlCommand command;
 
+    if (!reference_initialized_) {
+        x_ref_ = state.body.x;
+        yaw_ref_ = state.body.yaw;
+        reference_initialized_ = true;
+    }
+
+    // MCU ChassisReference: 每个 2 ms 周期先对遥控速度做离散一阶低通，
+    // 再用滤波结果积分位置参考。alpha 是逐采样系数，不再乘 dt。
+    speed_ref_ += kMcuSpeedReferenceAlpha * (speed_command_ - speed_ref_);
     x_ref_ += speed_ref_ * kControlPeriod;
+    yaw_ref_ = std::remainder(yaw_ref_ + yaw_rate_command_ * kControlPeriod,
+                              2.0 * 3.14159265358979323846);
+    tail_angle_ref_ += kTailReferenceAlpha * (tail_angle_command_ - tail_angle_ref_);
     command.x_ref = x_ref_;
     command.speed_ref = speed_ref_;
+    command.yaw_ref = yaw_ref_;
+    command.yaw_rate_ref = yaw_rate_command_;
 
     // 确定基础目标腿长
-    const double base_ref_l0 = (mode_ == ControlMode::Tripod)     ? config_.ref_leg_length_tripod
-                             : (mode_ == ControlMode::ProXTripod) ? config_.ref_leg_length_proX
-                             : (mode_ == ControlMode::Bipedal)    ? config_.ref_leg_length_bipedal
-                             : config_.ref_leg_length_default;
+    const double base_ref_l0 = leg_length_ref();
 
     // ===== 腿长统一协调（roll 角 → 左右腿长差分配） =====
     double ref_l0_left = base_ref_l0;
     double ref_l0_right = base_ref_l0;
     {
-        double Ld0 = state.left_leg.l0 - state.right_leg.l0;
-        double L_diff = CalcLegLengthDiff(Ld0, state.body.roll, 0.0);
+        const double raw_leg_diff = state.left_leg.l0 - state.right_leg.l0;
+        filtered_leg_diff_ = (1.0 - kLegDiffLpfAlpha) * raw_leg_diff
+                           + kLegDiffLpfAlpha * filtered_leg_diff_;
+        const double roll_for_leg_coordination =
+            (mode_ == ControlMode::Bipedal) ? state.body.smooth_roll : state.body.roll;
+        double L_diff = CalcLegLengthDiff(filtered_leg_diff_, roll_for_leg_coordination, 0.0);
         if (mode_ != ControlMode::Bipedal) {
             L_diff = -L_diff;
         }
@@ -647,10 +723,10 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         command.ref_pitch = ref_pitch_tripod;
         command.ref_beta = ref_beta_tripod;
     } else if (mode_ == ControlMode::Bipedal) {
-        // MCU Bipedal 当前参考：双腿角、机体 pitch、尾巴 beta 均为 0。
+        // 腿角/pitch 附加参考为零；尾角经与 MCU 相同的低通处理。
         command.ref_theta = 0.0;
         command.ref_pitch = 0.0;
-        command.ref_beta = 0.0;
+        command.ref_beta = tail_angle_ref_;
     }
 
     // === ProXTripod：4×9 LQR（机体级，一次性计算）===
@@ -696,15 +772,15 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         double x_bp[12] = {
             state.body.x - x_ref_,
             state.body.x_dot - speed_ref_,
-            std::remainder(state.body.yaw, 2.0 * 3.14159265358979323846),
-            state.body.yaw_rate,
+            std::remainder(state.body.yaw - yaw_ref_, 2.0 * 3.14159265358979323846),
+            state.body.yaw_rate - yaw_rate_command_,
             state.leg_state[0].theta - theta_eq_bp[0],
             state.leg_state[0].theta_dot,
             state.leg_state[1].theta - theta_eq_bp[1],
             state.leg_state[1].theta_dot,
             state.body.pitch,
             state.body.pitch_rate,
-            state.beta,
+            state.beta - tail_angle_ref_,
             state.dbeta,
         };
         double output_bp[5] = {0};
@@ -797,7 +873,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         if (mode_ != ControlMode::ProXTripod) {
             const double ref_l0_i = (i == 0) ? ref_l0_left : ref_l0_right;
             const double l0_error = ref_l0_i - legs[i].l0;
-            const double F_pid = leg_length_pid_[i].Compute(l0_error, kControlPeriod);
+            const double F_pid = leg_length_pid_[i].Compute(l0_error);
             command.leg_length_error[i] = l0_error;
             command.leg_length_F_pid[i] = F_pid;
             command.leg_length_F_ff[i] = F_ff;
@@ -818,7 +894,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         const double F_ff_tail = config_.body_mass * config_.gravity * config_.tail_F_ff_ratio;
 
         // tail_up PID：pitch 误差 → tail_z 补偿偏移（对齐 MCU TAIL_UP）
-        const double tail_z_comp = tail_up_pid_.Compute(ref_pitch_tripod - state.body.pitch, kControlPeriod);
+        const double tail_z_comp = tail_up_pid_.Compute(ref_pitch_tripod - state.body.pitch);
 
         // 反馈 tail_z = 尾巴末端轮子竖直高度
         const double fdb_tail_z = kTailLength
@@ -842,7 +918,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
             ref_leglength_z -= tail_z_comp;
         }
         // tail_z PID：竖直高度 → 补偿力
-        const double F_compensate = tail_z_pid_.Compute(ref_tail_z - fdb_tail_z, kControlPeriod);
+        const double F_compensate = tail_z_pid_.Compute(ref_tail_z - fdb_tail_z);
 
         // 尾巴力矩 = 力臂 × 总竖直力
         const double cos_term = std::cos(state.beta - state.body.pitch + kTailBetaOmniToHand);
@@ -875,7 +951,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         for (int i = 0; i < 2; ++i) {
             const double ref_l0_i = (i == 0) ? ref_l0_left : ref_l0_right;
             const double l0_error = ref_l0_i - legs[i].l0;
-            const double F_pid = leg_length_pid_[i].Compute(l0_error, kControlPeriod);
+            const double F_pid = leg_length_pid_[i].Compute(l0_error);
             command.leg_length_error[i] = l0_error;
             command.leg_length_F_pid[i] = F_pid;
             command.vmc_F[i] = command.leg_length_F_ff[i] + F_pid;
@@ -906,7 +982,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         tail_torque = T_Tp_Tt_avg[2];
 
         // tail_comp PID：pitch 误差 → 尾巴力矩补偿（MCU: ref.pitch - body.pitch）
-        double tail_comp_out = tail_comp_pid_.Compute(ref_pitch_tripod - state.body.pitch, kControlPeriod);
+        double tail_comp_out = tail_comp_pid_.Compute(ref_pitch_tripod - state.body.pitch);
         tail_torque -= tail_comp_out;
     }
 
@@ -918,7 +994,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
     // ===== 两腿 theta 协调（ProXTripod 4×9 LQR 自带独立跟踪，不需要此 PID） =====
     if (mode_ != ControlMode::ProXTripod && mode_ != ControlMode::Bipedal) {
         double theta_diff = state.leg_state[1].theta - state.leg_state[0].theta;  // MCU: error = 设定(0)-反馈(θ_L-θ_R)
-        double coord_out = leg_coordination_pid_.Compute(theta_diff, kControlPeriod);
+        double coord_out = leg_coordination_pid_.Compute(theta_diff);
         command.coord_out = coord_out;
         command.vmc_Tp[0] += coord_out;
         command.vmc_Tp[1] -= coord_out;
@@ -931,6 +1007,7 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
         double joint_torque[2] = {0.0, 0.0};
         CalcVmc(command.vmc_F[i], command.vmc_Tp[i], legs[i].jacobian, joint_torque);
 
+        // 仿真采用 A 方案的力矩约束；模型侧仍保留同样的物理限幅。
         wheel_torque[i] = Clip(wheel_torque[i], config_.max_wheel_torque);
         joint_torque[0] = Clip(joint_torque[0], config_.max_joint_torque);
         joint_torque[1] = Clip(joint_torque[1], config_.max_joint_torque);
@@ -951,9 +1028,9 @@ ControlCommand BalanceController::Compute(const RobotState& state) {
 
     // ProXTripod/Bipedal 的机体级 LQR 已包含 yaw 反馈，不再叠加独立 PID。
     if (mode_ != ControlMode::ProXTripod && mode_ != ControlMode::Bipedal) {
-        const double yaw_target = 0.0;  // 仿真无遥控器，目标 yaw 速率恒为 0
+        const double yaw_target = yaw_rate_command_;
         const double yaw_error = yaw_target - state.body.yaw_rate;  // MCU: 设定-反馈
-        const double yaw_pid_out = yaw_velocity_pid_.Compute(yaw_error, kControlPeriod);
+        const double yaw_pid_out = yaw_velocity_pid_.Compute(yaw_error);
         //const double yaw_pid_out = 0;
         command.yaw_pid_out = yaw_pid_out;
         command.actuator_torque[4] = Clip(command.actuator_torque[4] - yaw_pid_out, config_.max_wheel_torque);

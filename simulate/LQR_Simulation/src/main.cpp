@@ -37,10 +37,12 @@ bool g_zero_gravity = false;
 bool g_control_enabled = false;
 bool g_control_output_enabled = true;
 bool g_reset_state_reader = false;
+bool g_reset_motion_state = false;
 bool g_reset_display_pending = false;
-double g_manual_yaw_offset = 0.0;
+bool g_keyboard_motion_active = false;
+bool g_stop_latched = false;
 int g_tp_impulse_count = 0;
-double g_stable_accum = 0.0;
+FeedbackSource g_feedback_source = FeedbackSource::Truth;
 double g_next_control_time = 0.0;
 double g_next_print_time = 0.0;
 double g_print_period = kDefaultPrintPeriod;
@@ -91,13 +93,8 @@ std::string ResolveModelPath(const std::string& requested) {
     return requested;
 }
 
-void SelectInitialState(const mjModel* model) {
-    if (model->nkey > 0) {
-        const char* name = mj_id2name(model, mjOBJ_KEY, 0);
-        std::cout << "Initial state: XML keyframe " << (name ? name : "unnamed") << "\n";
-    } else {
-        std::cout << "Initial state: XML default state\n";
-    }
+void SelectInitialState() {
+    std::cout << "Initial state: XML default state\n";
 }
 
 void ApplyInitialState(mjModel* model, mjData* data) {
@@ -128,6 +125,7 @@ void RestoreInitialState() {
 void ResetSimulation() {
     if (!g_model || !g_data) return;
     RestoreInitialState();
+    g_zero_gravity = std::fabs(g_initial_gravity[2]) < 1e-9;
     g_data->time = 0.0;
     // Hold one rendered frame at the exact XML-default pose before control
     // resumes, so the reset state is observable before the first LQR step.
@@ -136,10 +134,11 @@ void ResetSimulation() {
     g_control_output_enabled = false;
     g_reset_state_reader = true;
     g_reset_display_pending = true;
-    g_stable_accum = kStableRequired;
     g_next_control_time = 0.0;
     g_next_print_time = g_print_period;
-    g_manual_yaw_offset = 0.0;
+    g_keyboard_motion_active = false;
+    g_stop_latched = false;
+    g_reset_motion_state = false;
     g_tp_impulse_count = 0;
     g_last_command = {};
     g_last_state = {};
@@ -157,24 +156,62 @@ void PrintStateSnapshot(double time, const RobotState& state, const ControlComma
               << " pitch_rate=" << state.body.pitch_rate
               << " x=" << state.body.x
               << " x_dot=" << state.body.x_dot
+              << " speed_ref=" << command.speed_ref
+              << " yaw=" << state.body.yaw
+              << " yaw_ref=" << command.yaw_ref
+              << " yaw_rate_ref=" << command.yaw_rate_ref
+              << " beta=" << state.beta
+              << " beta_ref=" << command.ref_beta
               << " l0=" << state.left_leg.l0 << "," << state.right_leg.l0
               << " wheel=" << command.actuator_torque[4] << "," << command.actuator_torque[5]
               << " tail=" << command.actuator_torque[6]
-              << " enabled=" << (g_control_enabled ? "yes" : "no")
+              << " enabled=" << (g_control_enabled && g_control_output_enabled ? "yes" : "no")
               << "\n";
 }
 
 void FormatOverlay(char* left, size_t left_size, char* right, size_t right_size,
                    const BalanceController& controller) {
     std::snprintf(left, left_size,
-                  "LQR mode\nFPS\nSpeed ref\n\nMouse\nDrag: rotate\nShift+Drag: move\nScroll: zoom\n\nKeys\nM/N: mode\nV: speed\nLeft/Right: yaw\nT: Tp impulse\nP/Space: pause\nR: reset\nE: enable\nK: output\nG: gravity\nH: overlay\nEsc: exit");
+                  "LQR mode\nFPS\nFeedback\nSpeed cmd / ref\nYaw rate cmd\nYaw ref / actual\nLeg target L / R\nTail cmd / ref\nTail actual\n\nKeys\nW/S: move (hold)\nA/D: turn (hold)\nShift: slower\nQ/E: leg shorter/longer\nZ/C: tail angle -/+\nX: stop motion\nHome: neutral posture\nT: Tp disturbance\nM/N: mode\nP/Space: pause\nR: reset\nK: output\nG: gravity\nH: overlay\nEsc: exit\n\nMouse: drag/scroll");
     std::snprintf(right, right_size,
-                  "%s%s\n%.1f\n%+.2f m/s\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n%s\n%s",
+                  "%s%s%s\n%.1f\n%s\n%+.2f / %+.2f m/s\n%+.2f rad/s\n%+.2f / %+.2f rad\n%.3f / %.3f m\n%+.2f / %+.2f rad\n%+.2f rad",
                   controller.ModeName().c_str(),
                   g_paused ? " (PAUSED)" : (!g_control_output_enabled ? " (OUTPUT OFF)" : ""),
-                  g_fps, controller.speed_ref(),
-                  g_control_enabled ? "controller enabled" : "waiting for stable state",
-                  g_zero_gravity ? "zero gravity" : "normal gravity");
+                  g_zero_gravity ? " (ZERO GRAVITY)" : "",
+                  g_fps, g_feedback_source == FeedbackSource::Truth ? "truth" : "MCU observer",
+                  controller.speed_ref(), g_last_command.speed_ref, controller.yaw_rate_ref(),
+                  g_last_command.yaw_ref, g_last_state.body.yaw,
+                  g_last_command.ref_l0[0], g_last_command.ref_l0[1],
+                  controller.tail_angle_ref(), g_last_command.ref_beta, g_last_state.beta);
+}
+
+void UpdateKeyboardReferences(GLFWwindow* window, BalanceController& controller) {
+    if (!window) return;
+    if (!glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
+        controller.StopMotion();
+        g_keyboard_motion_active = false;
+        return;
+    }
+    const auto pressed = [window](int key) { return glfwGetKey(window, key) == GLFW_PRESS; };
+    const int forward = static_cast<int>(pressed(GLFW_KEY_W)) - static_cast<int>(pressed(GLFW_KEY_S));
+    const int turn = static_cast<int>(pressed(GLFW_KEY_A)) - static_cast<int>(pressed(GLFW_KEY_D));
+    const bool movement_keys_held = pressed(GLFW_KEY_W) || pressed(GLFW_KEY_S)
+                          || pressed(GLFW_KEY_A) || pressed(GLFW_KEY_D);
+    if (g_stop_latched && !movement_keys_held) g_stop_latched = false;
+    if (g_stop_latched) {
+        controller.StopMotion();
+    } else if (movement_keys_held || g_keyboard_motion_active) {
+        const bool slow = pressed(GLFW_KEY_LEFT_SHIFT) || pressed(GLFW_KEY_RIGHT_SHIFT);
+        controller.SetSpeedRef(forward * (slow ? kKeyboardSlowSpeed : kKeyboardSpeed));
+        controller.SetYawRateRef(turn * (slow ? kKeyboardSlowYawRate : kKeyboardYawRate));
+        g_keyboard_motion_active = movement_keys_held;
+    }
+    if (controller.mode() == ControlMode::Bipedal) {
+        const int leg = static_cast<int>(pressed(GLFW_KEY_E)) - static_cast<int>(pressed(GLFW_KEY_Q));
+        const int tail = static_cast<int>(pressed(GLFW_KEY_C)) - static_cast<int>(pressed(GLFW_KEY_Z));
+        if (leg) controller.SetLegLengthRef(controller.leg_length_ref() + leg * kKeyboardLegLengthRate * kControlPeriod);
+        if (tail) controller.SetTailAngleRef(controller.tail_angle_ref() + tail * kKeyboardTailAngleRate * kControlPeriod);
+    }
 }
 
 void KeyboardCallback(GLFWwindow* window, int key, int, int action, int) {
@@ -196,11 +233,6 @@ void KeyboardCallback(GLFWwindow* window, int key, int, int action, int) {
         if (!g_control_output_enabled && g_model && g_data) ClearCtrl(g_model, g_data);
         return;
     }
-    if (key == GLFW_KEY_E) {
-        g_control_enabled = true;
-        g_stable_accum = kStableRequired;
-        return;
-    }
     if (key == GLFW_KEY_G && g_model) {
         g_zero_gravity = !g_zero_gravity;
         g_model->opt.gravity[2] = g_zero_gravity ? 0.0 : -kDefaultGravity;
@@ -209,19 +241,24 @@ void KeyboardCallback(GLFWwindow* window, int key, int, int action, int) {
     if ((key == GLFW_KEY_M || key == GLFW_KEY_N) && g_controller) {
         const int next = (static_cast<int>(g_controller->mode()) + 1) % 4;
         g_controller->SetMode(static_cast<ControlMode>(next));
-        g_reset_state_reader = true;
+        g_controller->StopMotion();
+        g_reset_motion_state = true;
         return;
     }
-    if (key == GLFW_KEY_V && g_controller) {
-        g_controller->SetSpeedRef(g_controller->speed_ref() == 0.0 ? 1.0 : 0.0);
+    if (key == GLFW_KEY_X && g_controller) {
+        g_controller->StopMotion();
+        g_stop_latched = true;
         return;
     }
-    if (key == GLFW_KEY_LEFT) {
-        g_manual_yaw_offset = g_manual_yaw_offset == 2.0 ? 0.0 : 2.0;
+    if (key == GLFW_KEY_HOME && g_controller) {
+        g_controller->StopMotion();
+        g_controller->SetLegLengthRef(0.18);
+        g_controller->SetTailAngleRef(0.0);
+        g_stop_latched = true;
         return;
     }
-    if (key == GLFW_KEY_RIGHT) {
-        g_manual_yaw_offset = g_manual_yaw_offset == -2.0 ? 0.0 : -2.0;
+    if (key == GLFW_KEY_W || key == GLFW_KEY_S || key == GLFW_KEY_A || key == GLFW_KEY_D) {
+        g_keyboard_motion_active = true;
         return;
     }
     if (key == GLFW_KEY_T) {
@@ -273,6 +310,11 @@ int main(int argc, char** argv) {
     double render_fps = kDefaultRenderFps;
     double duration = kDefaultDuration;
     ControlMode start_mode = ControlMode::Bipedal;
+    bool headless = false;
+    double initial_speed = 0.0;
+    double initial_yaw_rate = 0.0;
+    double initial_leg_length = 0.18;
+    double initial_tail_angle = 0.0;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
@@ -286,6 +328,21 @@ int main(int argc, char** argv) {
             g_print_period = ParseDouble(argv[++i], g_print_period);
         } else if (arg == "--console-output") {
             g_console_output = true;
+        } else if (arg == "--headless") {
+            headless = true;
+        } else if (arg == "--feedback" && i + 1 < argc) {
+            const std::string source = argv[++i];
+            if (source == "truth") g_feedback_source = FeedbackSource::Truth;
+            else if (source == "mcu") g_feedback_source = FeedbackSource::McuObserver;
+            else { std::cerr << "--feedback must be truth or mcu\n"; return 1; }
+        } else if (arg == "--speed" && i + 1 < argc) {
+            initial_speed = ParseDouble(argv[++i], 0.0);
+        } else if (arg == "--yaw-rate" && i + 1 < argc) {
+            initial_yaw_rate = ParseDouble(argv[++i], 0.0);
+        } else if (arg == "--leg-length" && i + 1 < argc) {
+            initial_leg_length = ParseDouble(argv[++i], 0.18);
+        } else if (arg == "--tail-angle" && i + 1 < argc) {
+            initial_tail_angle = ParseDouble(argv[++i], 0.0);
         } else if (arg == "--zero-gravity") {
             g_zero_gravity = true;
         } else if (arg == "--mode" && i + 1 < argc) {
@@ -300,6 +357,8 @@ int main(int argc, char** argv) {
         } else if (arg == "--help") {
             std::cout << "Usage: lqr_sim [--model path] [--duration seconds] [--mode notail|bipedal|tripod|proxtripod]\n"
                          "                 [--render-fps hz] [--print-period seconds] [--console-output]\n"
+                         "                 [--headless] [--feedback truth|mcu]\n"
+                         "                 [--speed m/s] [--yaw-rate rad/s] [--leg-length m] [--tail-angle rad]\n"
                          "                 [--zero-gravity] [--pulse actuator torque_nm]\n";
             return 0;
         }
@@ -313,6 +372,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     g_model = model;
+    model->opt.timestep = kPhysicsPeriod;
     if (g_zero_gravity) {
         model->opt.gravity[0] = 0.0;
         model->opt.gravity[1] = 0.0;
@@ -325,31 +385,39 @@ int main(int argc, char** argv) {
         return 1;
     }
     g_data = data;
+    if (headless && duration <= 0.0) duration = 5.0;
+    GLFWwindow* window = nullptr;
+    bool glfw_initialized = false;
+    bool render_initialized = false;
 
     try {
-        SelectInitialState(model);
-        if (!glfwInit()) throw std::runtime_error("Could not initialize GLFW");
-        GLFWwindow* window = glfwCreateWindow(1280, 900, "LQR MuJoCo Simulation", nullptr, nullptr);
-        if (!window) throw std::runtime_error("Could not create GLFW window");
-        glfwMakeContextCurrent(window);
-        glfwSwapInterval(1);
+        SelectInitialState();
+        if (!headless) {
+            if (!glfwInit()) throw std::runtime_error("Could not initialize GLFW");
+            glfw_initialized = true;
+            window = glfwCreateWindow(1280, 900, "LQR MuJoCo Simulation", nullptr, nullptr);
+            if (!window) throw std::runtime_error("Could not create GLFW window");
+            glfwMakeContextCurrent(window);
+            glfwSwapInterval(1);
 
-        mjv_defaultCamera(&g_camera);
-        mjv_defaultOption(&g_option);
-        mjv_defaultScene(&g_scene);
-        mjr_defaultContext(&g_context);
-        mjv_makeScene(model, &g_scene, 2000);
-        mjr_makeContext(model, &g_context, mjFONTSCALE_150);
-        g_camera.azimuth = kDefaultCameraAzimuth;
-        g_camera.elevation = kDefaultCameraElevation;
-        g_camera.distance = kDefaultCameraDistance;
-        g_camera.lookat[0] = kDefaultCameraLookatX;
-        g_camera.lookat[1] = kDefaultCameraLookatY;
-        g_camera.lookat[2] = kDefaultCameraLookatZ;
-        glfwSetKeyCallback(window, KeyboardCallback);
-        glfwSetCursorPosCallback(window, MouseMoveCallback);
-        glfwSetMouseButtonCallback(window, MouseButtonCallback);
-        glfwSetScrollCallback(window, ScrollCallback);
+            mjv_defaultCamera(&g_camera);
+            mjv_defaultOption(&g_option);
+            mjv_defaultScene(&g_scene);
+            mjr_defaultContext(&g_context);
+            mjv_makeScene(model, &g_scene, 2000);
+            mjr_makeContext(model, &g_context, mjFONTSCALE_150);
+            render_initialized = true;
+            g_camera.azimuth = kDefaultCameraAzimuth;
+            g_camera.elevation = kDefaultCameraElevation;
+            g_camera.distance = kDefaultCameraDistance;
+            g_camera.lookat[0] = kDefaultCameraLookatX;
+            g_camera.lookat[1] = kDefaultCameraLookatY;
+            g_camera.lookat[2] = kDefaultCameraLookatZ;
+            glfwSetKeyCallback(window, KeyboardCallback);
+            glfwSetCursorPosCallback(window, MouseMoveCallback);
+            glfwSetMouseButtonCallback(window, MouseButtonCallback);
+            glfwSetScrollCallback(window, ScrollCallback);
+        }
 
         RobotMap map = MakeDefaultRobotMap();
         ResolveRobotMap(model, &map);
@@ -357,12 +425,19 @@ int main(int argc, char** argv) {
         CaptureInitialState(model, data);
         mj_forward(model, data);
 
-        StateReader state_reader;
+        StateReader state_reader(g_feedback_source);
         BalanceController controller;
         controller.SetMode(start_mode);
+        controller.SetSpeedRef(initial_speed);
+        controller.SetYawRateRef(initial_yaw_rate);
+        if (start_mode == ControlMode::Bipedal) {
+            controller.SetLegLengthRef(initial_leg_length);
+            controller.SetTailAngleRef(initial_tail_angle);
+        }
         g_controller = &controller;
         g_control_enabled = true;
-        g_stable_accum = kStableRequired;
+        std::cout << "Feedback: " << (g_feedback_source == FeedbackSource::Truth ? "truth" : "MCU observer (ideal zero bias)")
+                  << "; physics=1 ms, control=2 ms; no startup calibration\n";
         const int pulse_index = pulse_actuator.empty() ? -1 : FindActuatorByName(map, pulse_actuator);
         if (!pulse_actuator.empty() && pulse_index < 0) {
             throw std::runtime_error("Unknown actuator for --pulse: " + pulse_actuator);
@@ -373,11 +448,15 @@ int main(int argc, char** argv) {
         const double render_period = 1.0 / std::max(1.0, render_fps);
         double next_render_time = data->time;
 
-        while (!glfwWindowShouldClose(window) && (duration <= 0.0 || data->time < duration)) {
+        while ((!window || !glfwWindowShouldClose(window)) && (duration <= 0.0 || data->time < duration)) {
             bool render_reset_frame = false;
             if (g_reset_state_reader) {
                 state_reader.Reset();
                 g_reset_state_reader = false;
+            }
+            if (g_reset_motion_state) {
+                state_reader.ResetMotionStateForModeSwitch();
+                g_reset_motion_state = false;
             }
             if (g_reset_display_pending) {
                 g_reset_display_pending = false;
@@ -386,19 +465,15 @@ int main(int argc, char** argv) {
 
             if (!g_paused && data->time + 1e-12 >= g_next_control_time) {
                 ClearCtrl(model, data);
+                g_last_state = state_reader.Read(data, map, kControlPeriod);
                 if (g_control_enabled) {
-                    g_last_state = state_reader.Read(data, map, kControlPeriod);
+                    UpdateKeyboardReferences(window, controller);
                     g_last_command = controller.Compute(g_last_state);
+                    state_reader.SetSpeedReference(g_last_command.speed_ref);
 
                     if (pulse_index >= 0 && data->time >= pulse_start &&
                         data->time < pulse_start + pulse_duration) {
                         g_last_command.actuator_torque[pulse_index] += pulse_torque;
-                    }
-                    if (g_manual_yaw_offset != 0.0) {
-                        g_last_command.actuator_torque[4] = std::clamp(
-                            g_last_command.actuator_torque[4] + g_manual_yaw_offset, -20.0, 20.0);
-                        g_last_command.actuator_torque[5] = std::clamp(
-                            g_last_command.actuator_torque[5] - g_manual_yaw_offset, -20.0, 20.0);
                     }
                     if (g_tp_impulse_count > 0) {
                         g_last_command.vmc_Tp[0] += 20.0;
@@ -415,23 +490,29 @@ int main(int argc, char** argv) {
                         g_last_command.actuator_torque[3] = right[0];
                         --g_tp_impulse_count;
                     }
-                    if (g_control_output_enabled) {
-                        for (int i = 0; i < static_cast<int>(map.actuators.size()); ++i) {
-                            SetActuatorTorque(map, data, i, g_last_command.actuator_torque[i]);
-                        }
+                    for (int i = 0; i < static_cast<int>(map.actuators.size()); ++i) {
+                        // 扰动同样经过最终限幅，输出关闭时记录零力矩。
+                        const double limit = i < 4 ? kDefaultMaxJointTorque
+                            : (i < 6 ? kDefaultMaxWheelTorque : kDefaultMaxTailTorque);
+                        g_last_command.actuator_torque[i] = g_control_output_enabled
+                            ? std::clamp(g_last_command.actuator_torque[i], -limit, limit) : 0.0;
+                        SetActuatorTorque(map, data, i, g_last_command.actuator_torque[i]);
                     }
                 }
                 g_next_control_time += kControlPeriod;
             }
 
-            if (!g_paused) mj_step(model, data);
+            if (!g_paused) {
+                mj_step(model, data);
+                state_reader.UpdateImuRoll(data, map);
+            }
 
             if (data->time + 1e-12 >= g_next_print_time) {
                 if (g_console_output) PrintStateSnapshot(data->time, g_last_state, g_last_command);
                 g_next_print_time += g_print_period;
             }
 
-            if (g_paused || data->time + 1e-12 >= next_render_time) {
+            if (window && (g_paused || data->time + 1e-12 >= next_render_time)) {
                 mjrRect viewport = {0, 0, 0, 0};
                 glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
                 mjv_updateScene(model, data, &g_option, nullptr, &g_camera, mjCAT_ALL, &g_scene);
@@ -459,18 +540,23 @@ int main(int argc, char** argv) {
                     g_next_control_time = data->time;
                 }
             }
-            glfwPollEvents();
+            if (window) glfwPollEvents();
         }
 
-        mjr_freeContext(&g_context);
-        mjv_freeScene(&g_scene);
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        if (render_initialized) {
+            mjr_freeContext(&g_context);
+            mjv_freeScene(&g_scene);
+        }
+        if (window) glfwDestroyWindow(window);
+        if (glfw_initialized) glfwTerminate();
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << "\n";
-        mjr_freeContext(&g_context);
-        mjv_freeScene(&g_scene);
-        glfwTerminate();
+        if (render_initialized) {
+            mjr_freeContext(&g_context);
+            mjv_freeScene(&g_scene);
+        }
+        if (window) glfwDestroyWindow(window);
+        if (glfw_initialized) glfwTerminate();
         mj_deleteData(data);
         mj_deleteModel(model);
         g_data = nullptr;

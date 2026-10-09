@@ -1,13 +1,42 @@
-﻿// 仿真与控制器的集中可调常量。
+// 仿真与控制器的集中可调常量。
 // 将常用的数值放到此处，便于统一查看与修改。
 #pragma once
 
-// 控制循环周期（秒）
-// Match the MuJoCo physics timestep used by the LQR loop.
-inline constexpr double kControlPeriod = 0.00125;
+#include <array>
+
+// 两个 1 ms 物理步对应一次 2 ms 底盘控制，控制输出在两拍之间保持。
+inline constexpr double kPhysicsPeriod = 0.001;
+inline constexpr double kControlPeriod = 0.002;
+inline constexpr double kMcuSpeedReferenceAlpha = 0.12;
+inline constexpr double kTailReferenceAlpha = 0.15;
+inline constexpr double kMcuWheelDeadzone = 0.01;
+inline constexpr double kVelocityDeadzoneEnter = 0.0003;
+inline constexpr double kVelocityDeadzoneExit = 0.0006;
+inline constexpr double kVelocityProcessNoise = 25.0;
+inline constexpr double kAccelerationProcessNoise = 2000.0;
+inline constexpr double kVelocityMeasurementNoise = 800.0;
+inline constexpr double kAccelerationMeasurementNoise = 0.01;
+inline constexpr double kMcuImuPeriod = kPhysicsPeriod;
+inline constexpr double kRollWheelNaturalFrequency = 25.53;
+inline constexpr double kRollWheelDampingRatio = 0.154;
+inline constexpr double kRollAngleMeasurementVariance = 1.1e-2;
+inline constexpr double kRollRateMeasurementVariance = 1.0e-3;
+inline constexpr std::array<double, 4> kRollProcessNoise = {1.0e-7, 1.0e-3, 1.0e-7, 1.0e-3};
+
+// 键盘虚拟遥控器：W/S/A/D 按住运动，Shift 降低速度；腿长/尾角连续微调。
+inline constexpr double kKeyboardSpeed = 0.5;
+inline constexpr double kKeyboardSlowSpeed = 0.2;
+inline constexpr double kKeyboardYawRate = 0.5;
+inline constexpr double kKeyboardSlowYawRate = 0.2;
+inline constexpr double kKeyboardLegLengthRate = 0.02;
+inline constexpr double kKeyboardTailAngleRate = 0.4;
+inline constexpr double kMaxSpeedReference = 1.8;
+inline constexpr double kMaxYawRateReference = 5.0;
+inline constexpr double kMinTailReference = -0.24;
+inline constexpr double kMaxTailReference = 1.57079632679489661923;
 
 // Rendering is deliberately decoupled from physics.  Keeping this at 60 Hz
-// avoids a GPU swap for every 800 Hz physics step and lets simulation run near
+// avoids a GPU swap for every physics step and lets simulation run near
 // real time without changing the control timing.
 inline constexpr double kDefaultRenderFps = 60.0;
 
@@ -70,14 +99,15 @@ inline constexpr double kDefaultTailKd = 0.8;
 
 // Yaw 速度 PID 默认参数（对齐 MCU robot_param_balanced_infantry.h）
 inline constexpr double kDefaultYawVelocityKp = 3.0;
-inline constexpr double kDefaultYawVelocityKi = 250.0;
+inline constexpr double kDefaultYawVelocityKi = 0.5;
 inline constexpr double kDefaultYawVelocityKd = 0.1;
 inline constexpr double kDefaultYawVelocityMaxOutput = 2.0;
 inline constexpr double kDefaultYawVelocityMaxIout = 0.5;
 
 // 两腿协调参数
 // 轮距 (m)，用于腿长协调算法中的roll角几何计算
-inline constexpr double kWheelBase = 0.2;  // MuJoCo 模型实际轮距
+inline constexpr double kWheelBase = 0.414;  // MCU WHEEL_BASE
+inline constexpr double kChassisRollDeadband = 0.015;
 
 // 两腿 theta 协调 PID 默认参数（对齐 MCU N_CHASSIS_LEG_COOR=0.0）
 inline constexpr double kDefaultLegCoordKp = 50.0;
@@ -92,6 +122,7 @@ inline constexpr double kMaxLegLength = 0.30;  // 对齐 MCU MAX_LEG_LENGTH
 
 // Roll 角速度阻尼因子 (N per rad/s)，用于腿部力分配
 inline constexpr double kDefaultRollVelLimitFactor = 0.1;  // 对齐 MCU ROLL_VEL_LIMIT_FACTOR
+inline constexpr double kLegDiffLpfAlpha = 0.92;
 
 // Tail compensation PID 默认参数（对齐 MCU TAIL_COMP，Ki=0 → dt换算无影响）
 inline constexpr double kDefaultTailCompKp = 0.15;

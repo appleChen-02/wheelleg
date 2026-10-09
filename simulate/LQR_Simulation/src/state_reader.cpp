@@ -197,9 +197,171 @@ void SetActuatorTorque(const RobotMap& map, mjData* data, int actuator_index, do
 }
 
 void StateReader::Reset() {
+    velocity_deadzone_active_ = true;
     initialized_ = false;
     previous_ = {};
     accumulated_x_ = 0.0;
+    speed_reference_ = 0.0;
+    previous_body_pitch_ = 0.0;
+    previous_body_pitch_rate_ = 0.0;
+    velocity_observer_state_ = {};
+    velocity_observer_covariance_ = {{{{100000.0, 0.0}}, {{0.0, 100000.0}}}};
+    roll_smoother_initialized_ = false;
+    roll_smoother_last_raw_ = 0.0;
+    roll_smoother_state_ = {};
+    roll_smoother_covariance_ = {};
+}
+
+void StateReader::SetSpeedReference(double speed_reference) {
+    speed_reference_ = speed_reference;
+}
+
+void StateReader::ResetMotionStateForModeSwitch() {
+    accumulated_x_ = 0.0;
+    velocity_observer_state_ = {};
+    for (auto& previous : previous_) {
+        previous.x = 0.0;
+        previous.x_dot = 0.0;
+        previous.delta_x = 0.0;
+        previous.delta_x_dot = 0.0;
+    }
+}
+
+double StateReader::UpdateRollSmoother(double raw_roll, double raw_roll_rate) {
+    if (!roll_smoother_initialized_) {
+        roll_smoother_state_ = {raw_roll, 0.0, raw_roll, 0.0};
+        roll_smoother_covariance_ = {};
+        for (int i = 0; i < 4; ++i) roll_smoother_covariance_[i][i] = 1.0;
+        roll_smoother_last_raw_ = raw_roll;
+        roll_smoother_initialized_ = true;
+        return raw_roll;
+    }
+
+    const double wrapped_last = std::remainder(roll_smoother_last_raw_, 2.0 * kPi);
+    const double raw_unwrapped = roll_smoother_last_raw_
+                               + std::remainder(raw_roll - wrapped_last, 2.0 * kPi);
+    roll_smoother_last_raw_ = raw_unwrapped;
+
+    double f[4][4] = {};
+    f[0][0] = 1.0;
+    f[0][1] = kMcuImuPeriod;
+    f[1][1] = 1.0;
+    f[2][2] = 1.0;
+    f[2][3] = kMcuImuPeriod;
+    f[3][0] = kMcuImuPeriod * kRollWheelNaturalFrequency * kRollWheelNaturalFrequency;
+    f[3][2] = -f[3][0];
+    f[3][3] = 1.0 - 2.0 * kMcuImuPeriod * kRollWheelDampingRatio
+                    * kRollWheelNaturalFrequency;
+
+    double x_minus[4] = {};
+    double fp[4][4] = {};
+    double p_minus[4][4] = {};
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            x_minus[i] += f[i][j] * roll_smoother_state_[j];
+            for (int n = 0; n < 4; ++n) {
+                fp[i][j] += f[i][n] * roll_smoother_covariance_[n][j];
+            }
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            for (int n = 0; n < 4; ++n) p_minus[i][j] += fp[i][n] * f[j][n];
+        }
+        p_minus[i][i] += kRollProcessNoise[i];
+    }
+
+    double gain[4] = {};
+    double s = std::max(p_minus[2][2] + kRollAngleMeasurementVariance, 1.0e-9);
+    for (int i = 0; i < 4; ++i) gain[i] = p_minus[i][2] / s;
+    const double angle_innovation = raw_unwrapped - x_minus[2];
+    for (int i = 0; i < 4; ++i) {
+        roll_smoother_state_[i] = x_minus[i] + gain[i] * angle_innovation;
+        for (int j = 0; j < 4; ++j) {
+            roll_smoother_covariance_[i][j] = p_minus[i][j] - gain[i] * p_minus[2][j];
+        }
+    }
+
+    // 第二个标量测量按 MCU 原代码顺序用 gyro roll rate 更新 x[3]。
+    s = std::max(roll_smoother_covariance_[3][3] + kRollRateMeasurementVariance, 1.0e-9);
+    for (int i = 0; i < 4; ++i) gain[i] = roll_smoother_covariance_[i][3] / s;
+    const double rate_innovation = raw_roll_rate - roll_smoother_state_[3];
+    const auto covariance_row3 = roll_smoother_covariance_[3];
+    for (int i = 0; i < 4; ++i) {
+        roll_smoother_state_[i] += gain[i] * rate_innovation;
+        for (int j = 0; j < 4; ++j) {
+            roll_smoother_covariance_[i][j] -= gain[i] * covariance_row3[j];
+        }
+    }
+    return std::remainder(roll_smoother_state_[0], 2.0 * kPi);
+}
+
+void StateReader::UpdateImuRoll(const mjData* data, const RobotMap& map) {
+    if (source_ == FeedbackSource::Truth) return;
+    const auto& body = map.joints[7];
+    const double qw = data->qpos[body.qpos_adr + 3];
+    const double qx = data->qpos[body.qpos_adr + 4];
+    const double qy = data->qpos[body.qpos_adr + 5];
+    const double qz = data->qpos[body.qpos_adr + 6];
+    double roll = 0.0, pitch = 0.0, yaw = 0.0;
+    QuaternionToEuler(qw, qx, qy, qz, &roll, &pitch, &yaw);
+
+    // Free-joint qvel 的旋转三项已经是局部机体系陀螺角速度 p/q/r。
+    const double wxb = data->qvel[body.qvel_adr + 3];
+    const double wyb = data->qvel[body.qvel_adr + 4];
+    const double wzb = data->qvel[body.qvel_adr + 5];
+    const double cp = std::cos(pitch);
+    const double roll_rate = wxb + wyb * std::sin(roll) * std::tan(pitch)
+                           + wzb * std::cos(roll) * std::tan(pitch);
+    UpdateRollSmoother(roll, std::fabs(cp) > 1.0e-6 ? roll_rate : wxb);
+}
+
+double StateReader::UpdateVelocityObserver(double speed_measurement,
+                                           double acceleration_measurement,
+                                           double dt) {
+    // 与 MCU Kalman_Filter_Update 相同的 2x2 线性 KF：
+    // x=[v,a], F=[1 dt;0 1], H=I。
+    const double x_minus[2] = {
+        velocity_observer_state_[0] + dt * velocity_observer_state_[1],
+        velocity_observer_state_[1],
+    };
+
+    const double p00 = velocity_observer_covariance_[0][0];
+    const double p01 = velocity_observer_covariance_[0][1];
+    const double p10 = velocity_observer_covariance_[1][0];
+    const double p11 = velocity_observer_covariance_[1][1];
+    const double pm00 = p00 + dt * (p10 + p01) + dt * dt * p11
+                      + kVelocityProcessNoise;
+    const double pm01 = p01 + dt * p11;
+    const double pm10 = p10 + dt * p11;
+    const double pm11 = p11 + kAccelerationProcessNoise;
+
+    // S=P-+R。R 为对角阵，显式求逆可避免引入额外矩阵库。
+    const double s00 = pm00 + kVelocityMeasurementNoise;
+    const double s01 = pm01;
+    const double s10 = pm10;
+    const double s11 = pm11 + kAccelerationMeasurementNoise;
+    const double determinant = s00 * s11 - s01 * s10;
+    const double inv_s00 = s11 / determinant;
+    const double inv_s01 = -s01 / determinant;
+    const double inv_s10 = -s10 / determinant;
+    const double inv_s11 = s00 / determinant;
+
+    const double k00 = pm00 * inv_s00 + pm01 * inv_s10;
+    const double k01 = pm00 * inv_s01 + pm01 * inv_s11;
+    const double k10 = pm10 * inv_s00 + pm11 * inv_s10;
+    const double k11 = pm10 * inv_s01 + pm11 * inv_s11;
+    const double innovation0 = speed_measurement - x_minus[0];
+    const double innovation1 = acceleration_measurement - x_minus[1];
+    velocity_observer_state_[0] = x_minus[0] + k00 * innovation0 + k01 * innovation1;
+    velocity_observer_state_[1] = x_minus[1] + k10 * innovation0 + k11 * innovation1;
+
+    // MCU 实现采用 P=(I-KH)P-（H=I），保持相同更新形式。
+    velocity_observer_covariance_[0][0] = (1.0 - k00) * pm00 - k01 * pm10;
+    velocity_observer_covariance_[0][1] = (1.0 - k00) * pm01 - k01 * pm11;
+    velocity_observer_covariance_[1][0] = -k10 * pm00 + (1.0 - k11) * pm10;
+    velocity_observer_covariance_[1][1] = -k10 * pm01 + (1.0 - k11) * pm11;
+    return velocity_observer_state_[0];
 }
 
 RobotState StateReader::Read(const mjData* data, const RobotMap& map, double dt) {
@@ -235,62 +397,80 @@ RobotState StateReader::Read(const mjData* data, const RobotMap& map, double dt)
     const double qy = data->qpos[body.qpos_adr + 5];
     const double qz = data->qpos[body.qpos_adr + 6];
     QuaternionToEuler(qw, qx, qy, qz, &state.body.roll, &state.body.pitch, &state.body.yaw);
-    const double raw_yaw = state.body.yaw;   // 真实几何角度，用于 x_dot 旋转变换
     state.body.pitch = -state.body.pitch;
     // yaw 不再取反
 
-    // 世界系线速度（MuJoCo 自由关节的 qvel 在世界系下）
-    const double vx_world = data->qvel[body.qvel_adr + 0];
-    const double vy_world = data->qvel[body.qvel_adr + 1];
-    // 转回机身系：前进方向速度（使用真实 yaw 做几何旋转）
-    const double cy = std::cos(raw_yaw);
-    const double sy = std::sin(raw_yaw);
-    state.body.x_dot =  vx_world * cy + vy_world * sy;
-    // side slip（暂不存，但可用于调试）
-    // double vy_body = -vx_world * sy + vy_world * cy;
-
-    // 机身系位移：积分前进速度（仿 MCU 逻辑，仅在低速时积分，高速时冻结）
-    if (std::fabs(state.body.x_dot) < 0.8) {
-        accumulated_x_ += state.body.x_dot * dt;
-    }
-    state.body.x = accumulated_x_;
-
-    // 世界系角速度 → 机体系角速度 → 欧拉角速率
-    // MuJoCo 自由关节 qvel[3:5] = 世界系角速度 [wx_w, wy_w, wz_w]
-    const double wx_w = data->qvel[body.qvel_adr + 3];
-    const double wy_w = data->qvel[body.qvel_adr + 4];
-    const double wz_w = data->qvel[body.qvel_adr + 5];
-
-    // 用四元数构建 R_body_to_world，取 R^T 把 ω_world 转到 ω_body
+    // 四元数旋转矩阵仅供后面的世界系线加速度转机体系使用。
     const double r11 = 1.0 - 2.0 * (qy * qy + qz * qz);
-    const double r12 = 2.0 * (qx * qy - qw * qz);
-    const double r13 = 2.0 * (qx * qz + qw * qy);
     const double r21 = 2.0 * (qx * qy + qw * qz);
-    const double r22 = 1.0 - 2.0 * (qx * qx + qz * qz);
-    const double r23 = 2.0 * (qy * qz - qw * qx);
     const double r31 = 2.0 * (qx * qz - qw * qy);
-    const double r32 = 2.0 * (qy * qz + qw * qx);
-    const double r33 = 1.0 - 2.0 * (qx * qx + qy * qy);
 
-    const double wxb = r11 * wx_w + r21 * wy_w + r31 * wz_w;
-    const double wyb = r12 * wx_w + r22 * wy_w + r32 * wz_w;
-    const double wzb = r13 * wx_w + r23 * wy_w + r33 * wz_w;
-
-    // ZYX 欧拉角速率（使用 flip 前的真实 pitch）
-    const double pitch_true = -state.body.pitch;
-    const double cr = std::cos(state.body.roll);
-    const double sr = std::sin(state.body.roll);
-    const double cp = std::cos(pitch_true);
-    const double tp = (std::fabs(cp) > 1e-6) ? std::sin(pitch_true) / cp : 0.0;
-
-    state.body.roll_rate  = wxb + wyb * sr * tp + wzb * cr * tp;
-    state.body.pitch_rate = -(wyb * cr - wzb * sr);   // pitch 有符号 flip
-    state.body.yaw_rate   = ((std::fabs(cp) > 1e-6) ? (wyb * sr + wzb * cr) / cp : 0.0);
+    // MCU GetImuVelocity 直接返回机体系陀螺仪 p/q/r，并未转换成欧拉角导数。
+    // pitch 角在仿真控制约定中取反，所以对应 q 轴角速度也取反。
+    const auto controller_rates = ControllerRatesFromFreeJointAngularVelocity(
+        data->qvel[body.qvel_adr + 3],
+        data->qvel[body.qvel_adr + 4],
+        data->qvel[body.qvel_adr + 5]);
+    state.body.roll_rate = controller_rates[0];
+    state.body.pitch_rate = controller_rates[1];
+    state.body.yaw_rate = controller_rates[2];
+    if (source_ == FeedbackSource::McuObserver && !roll_smoother_initialized_) {
+        UpdateRollSmoother(state.body.roll, state.body.roll_rate);
+    }
+    state.body.smooth_roll = source_ == FeedbackSource::Truth ? state.body.roll
+        : std::remainder(roll_smoother_state_[0], 2.0 * kPi);
 
     const LegKinematics legs[2] = {state.left_leg, state.right_leg};
+    // 先构造腿角；MCU 轮速观测量包含 l*cos(theta)*dtheta。
     for (int i = 0; i < 2; ++i) {
         state.leg_state[i].theta = kPi / 2.0 - legs[i].phi0 - state.body.pitch;
         state.leg_state[i].theta_dot = -legs[i].dphi0 - state.body.pitch_rate;
+    }
+
+    const double observer_theta[2] = {
+        kPi / 2.0 - legs[0].phi0 - previous_body_pitch_,
+        kPi / 2.0 - legs[1].phi0 - previous_body_pitch_,
+    };
+    const double observer_theta_dot[2] = {
+        -legs[0].dphi0 - previous_body_pitch_rate_,
+        -legs[1].dphi0 - previous_body_pitch_rate_,
+    };
+    const double speed_measurement =
+        (kWheelRadius * state.left_wheel_velocity
+         + std::cos(observer_theta[0]) * legs[0].l0 * observer_theta_dot[0]
+         + kWheelRadius * state.right_wheel_velocity
+         + std::cos(observer_theta[1]) * legs[1].l0 * observer_theta_dot[1]) / 2.0;
+
+    // qacc 的自由关节平移分量是世界系质心坐标加速度；旋转到机体系后
+    // 等价于 MCU 中已完成重力补偿的 x_accel。
+    const double acceleration_measurement =
+        r11 * data->qacc[body.qvel_adr + 0]
+        + r21 * data->qacc[body.qvel_adr + 1]
+        + r31 * data->qacc[body.qvel_adr + 2];
+    if (source_ == FeedbackSource::Truth) {
+        // LQR 的 x 是沿水平航向的纵向路程，随转向累计；连续运动时也积分。
+        state.body.x_dot = std::cos(state.body.yaw) * data->qvel[body.qvel_adr]
+                         + std::sin(state.body.yaw) * data->qvel[body.qvel_adr + 1];
+        accumulated_x_ += state.body.x_dot * dt;
+    } else {
+        // 仿真传感量无零偏，直接复现固件 KF、速度滞回死区和积分门控。
+        state.body.x_dot = UpdateVelocityObserver(speed_measurement, acceleration_measurement, dt);
+        if (velocity_deadzone_active_) {
+            if (std::fabs(state.body.x_dot) > kVelocityDeadzoneExit) velocity_deadzone_active_ = false;
+        } else if (std::fabs(state.body.x_dot) < kVelocityDeadzoneEnter) {
+            velocity_deadzone_active_ = true;
+        }
+        if (velocity_deadzone_active_) state.body.x_dot = 0.0;
+        // Observer 在 Reference 之前运行，使用上一周期的速度目标。
+        if (std::fabs(speed_reference_) < kMcuWheelDeadzone && std::fabs(state.body.x_dot) < 0.8) {
+            accumulated_x_ += state.body.x_dot * dt;
+        }
+    }
+    state.body.x = accumulated_x_;
+    previous_body_pitch_ = state.body.pitch;
+    previous_body_pitch_rate_ = state.body.pitch_rate;
+
+    for (int i = 0; i < 2; ++i) {
         state.leg_state[i].x = state.body.x;
         state.leg_state[i].x_dot = state.body.x_dot;
         state.leg_state[i].phi = state.body.pitch;
