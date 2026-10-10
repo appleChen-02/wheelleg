@@ -33,6 +33,7 @@ private:
     void Abort(double time, const std::string& reason);
     bool HasExcitation() const;
     double ExcitationDuration() const;
+    void PrintProgress(double time, bool force = false);
     const mjModel* model_;
     RobotMap map_;
     std::filesystem::path outdir_;
@@ -47,6 +48,7 @@ private:
     double excitation_start_ = -1.0;
     double excitation_end_ = -1.0;
     double last_time_ = 0.0;
+    double next_progress_time_ = 0.0;
     double host_epoch_ = 0.0;
     std::uint64_t sequence_ = 0;
     std::uint64_t excitation_sample_ = 0;

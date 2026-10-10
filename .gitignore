@@ -3,3 +3,4 @@
 *.asv
 matlab/系统辨识/results/
 simulate/LQR_Simulation/build
+simulate/LQR_Simulation/logs

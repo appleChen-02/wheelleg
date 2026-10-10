@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <locale>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -101,6 +102,7 @@ SystemIdentificationExperiment::SystemIdentificationExperiment(
     host_epoch_ = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
     std::cout << "[SYSID] WAITING_FOR_STABILITY: fixed references, control=2 ms, CSV=4 ms.\n"
               << "[SYSID] Output: " << PathText(outdir_) << "\n" << std::flush;
+    PrintProgress(0.0, true);
 }
 
 SystemIdentificationExperiment::~SystemIdentificationExperiment() {
@@ -116,6 +118,33 @@ double SystemIdentificationExperiment::ExcitationDuration() const {
     if (!HasExcitation()) return parameters_.baseline_duration;
     return parameters_.excitation_mode == SystemIdentificationExcitation::SineSweep
         ? parameters_.sweep_duration : parameters_.prbs_duration;
+}
+
+void SystemIdentificationExperiment::PrintProgress(double time, bool force) {
+    if (!force && (phase_ == Phase::Aborted || time + 1e-9 < next_progress_time_)) return;
+    next_progress_time_ = time + SYS_ID_PROGRESS_PERIOD_SECONDS;
+    const double total = parameters_.pre_seconds + ExcitationDuration() + parameters_.post_seconds;
+    const double recorded = recording_start_ >= 0.0 ? std::max(0.0, time - recording_start_) : 0.0;
+    const double elapsed = std::min(recorded, total);
+    const char* phase = phase_ == Phase::Exciting && !HasExcitation() ? "baseline_capture" : PhaseName();
+    // 使用独立流格式化，不改变其他控制状态打印的精度。
+    std::ostringstream line;
+    line.imbue(std::locale::classic());
+    line << std::fixed << std::setprecision(1)
+         << "[SYSID] PROGRESS: collected=" << elapsed << '/' << total << " s ("
+         << (total > 0.0 ? 100.0 * elapsed / total : 100.0) << "%); phase=" << phase;
+    if (phase_ == Phase::Waiting) {
+        const double stable = stable_since_ >= 0.0 ? std::max(0.0, time - stable_since_) : 0.0;
+        line << "; waited=" << time << '/' << parameters_.settle_timeout_seconds
+             << " s; continuous_stable=" << stable << '/' << parameters_.stable_seconds << " s";
+    } else if (phase_ == Phase::Complete) {
+        line << "; extra_recorded=" << std::max(0.0, recorded - total) << " s; stop manually to save";
+    } else if (phase_ == Phase::Aborted) {
+        line << "; capture aborted; stop manually to save";
+    } else {
+        line << "; remaining=" << std::max(0.0, total - recorded) << " s";
+    }
+    std::cout << line.str() << '\n' << std::flush;
 }
 
 bool SystemIdentificationExperiment::IsStable(const RobotState& s) const {
@@ -149,6 +178,7 @@ void SystemIdentificationExperiment::Abort(double time, const std::string& reaso
 }
 
 std::array<double, 5> SystemIdentificationExperiment::Advance(double time, const RobotState& state) {
+    const Phase previous_phase = phase_;
     ++sequence_;
     last_time_ = time;
     std::array<double, 5> excitation{};
@@ -215,6 +245,7 @@ std::array<double, 5> SystemIdentificationExperiment::Advance(double time, const
         std::cout << "[SYSID] IDENTIFICATION_CAPTURE_FINISHED: excitation and post-response capture complete.\n"
                   << "[SYSID] LQR and recording remain ON. Press Esc / close the window / Ctrl+C to stop and save CSV.\n" << std::flush;
     }
+    PrintProgress(time, phase_ != previous_phase);
     return excitation;
 }
 

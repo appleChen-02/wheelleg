@@ -64,7 +64,7 @@ inline constexpr double SYS_ID_LEG_LENGTH = 0.18;
 // 默认位置参考为仿真起点 0 m；如需采用固件当前的 -0.5 m，修改第 0 项。
 // 参考是目标，实际稳态可能有偏置；后续辨识应相对记录的实际工作点做偏差化。
 inline constexpr std::array<double, 18> SYS_ID_REFERENCE = {
-    -1.0,                // [ 0] body_x：纵向位置目标，m。
+    -1.6,                // [ 0] body_x：纵向位置目标，m。
     0.0,                // [ 1] body_x_dot：纵向速度目标，m/s，保持为 0。
     0.0,                // [ 2] yaw：机身航向角目标，rad；控制误差会归一化到 ±pi。
     0.0,                // [ 3] yaw_dot：航向角速度目标，rad/s，保持为 0。
@@ -89,7 +89,7 @@ inline constexpr std::array<double, 18> SYS_ID_REFERENCE = {
 // 总使能：true 按 MODE/MASK/AMPLITUDE 生成激励；false 保持纯闭环无激励。
 // false 时仍执行稳定等待、激励前基线、正式基线采集和结束响应记录。
 // 首次采无激励基线只需改为 false，其他激励参数可保留。
-inline constexpr bool SYS_ID_EXCITATION_ENABLE = false;
+inline constexpr bool SYS_ID_EXCITATION_ENABLE = true;
 
 // 有效激励需要 ENABLE=true 且 MODE!=Disabled，两者任一关闭都不会施加激励。
 // 默认从尾巴单通道 SineSweep 开始；全通道实验建议改为 Prbs。
@@ -101,7 +101,7 @@ inline constexpr auto SYS_ID_EXCITATION_MODE = SystemIdentificationExcitation::S
 // 组合示例：0x03 双髋，0x0C 双轮，0x1F 五通道。不要使用 bit5/bit6。
 // 多通道扫频具有相同相位和频率，输入高度相关，不宜用来拟合完整 MIMO 模型；
 // 单通道探索用扫频，全通道实验用不同种子的 PRBS，并检查输入相关性。
-inline constexpr std::uint8_t SYS_ID_EXCITATION_INPUT_MASK = 0x01;
+inline constexpr std::uint8_t SYS_ID_EXCITATION_INPUT_MASK = 0x02;
 
 // 顺序为 [右髋 Tp, 左髋 Tp, 右轮 T, 左轮 T, 尾巴 T]，单位 N*m。
 // 每个值是非负峰值 A，不是峰峰值；正弦范围 [-A,A]，PRBS 两电平为 ±A。
@@ -163,6 +163,13 @@ inline constexpr double SYS_ID_PRE_EXCITATION_SECONDS = 10.0;
 // 正式采集到期后，关闭激励并记录自由恢复响应的最短时长，s，必须 >=0。
 // 到期输出 IDENTIFICATION_CAPTURE_FINISHED，此后仍记录，直到手动停止。
 inline constexpr double SYS_ID_POST_EXCITATION_SECONDS = 10.0;
+
+// 命令行进度输出间隔，单位为仿真秒，必须 >0；无需打开 --console-output。
+// “已采集/总时长”从稳定后打开 CSV 时开始计时，总时长为 PRE+正式采集+POST，
+// 不含启动等待。无激励时正式采集采用 BASELINE_DURATION，扫频/PRBS 用各自时长。
+// 阶段切换时额外立即打印一次；完成后显示 100% 和额外记录时长，等待手动保存。
+inline constexpr double SYS_ID_PROGRESS_PERIOD_SECONDS = 10.0;
+static_assert(SYS_ID_PROGRESS_PERIOD_SECONDS > 0.0, "SYS_ID progress period must be positive");
 
 // 所有稳定条件连续满足的时间，s，必须 >0；任一条件不满足就重新计时。
 // 稳定条件包括速度、腿长误差、相对候选起点的状态变化、有限值、
@@ -251,7 +258,7 @@ static_assert(SYS_ID_SAMPLE_SEND_PERIOD_MS == 4 && SYS_ID_REFERENCE_SEND_PERIOD_
 // 测试程序可写 p.excitation_mode=Prbs; p.prbs_duration=2.0; 来构造短实验，
 // 并把同一个 p 传给控制器和实验对象，无需修改正式实验默认值。
 // 这种覆盖发生在程序代码中；当前主程序没有从命令行/配置文件覆盖这些成员的接口。
-// 稳定速度等阈值、中止阈值、雅可比阈值和日志周期未打包，仍直接使用上方常量。
+// 稳定速度等阈值、中止阈值、雅可比阈值、日志周期和进度周期未打包，仍直接使用上方常量。
 struct SystemIdentificationParameters {
     std::array<double, 18> reference = SYS_ID_REFERENCE;  // 固定物理状态参考，theta 为附加量。
     bool excitation_enable = SYS_ID_EXCITATION_ENABLE;   // 总使能。

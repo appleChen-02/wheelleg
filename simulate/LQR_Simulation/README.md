@@ -119,6 +119,16 @@ cmake --build build --parallel
 4. `EXCITATION_FINISHED`：停止激励，继续记录至少 10 s 的结束响应，LQR 保持运行。
 5. `IDENTIFICATION_CAPTURE_FINISHED`：采集所需阶段已结束，闭环和记录继续运行。此时按 **Esc** 或关闭仿真窗口，程序关闭文件并打印 `DATA_SAVED` 和保存路径。窗口中可暂停/继续和调整视角；运动、工作点、模式切换、重置、额外扰动及关闭输出操作被锁定。
 
+命令行默认每 10 秒仿真时间输出一次进度，阶段切换时也立即输出，无需 `--console-output`：
+
+```text
+[SYSID] PROGRESS: collected=20.0/50.0 s (40.0%); phase=baseline_capture; remaining=30.0 s
+```
+
+已采集时长从稳定后开始写 CSV 时计算，总时长包含激励前基线、正式激励/无激励基线、结束响应，不包含等待稳定的时间。
+等待稳定时显示等待时长和连续稳定时长；采集完成后显示 100% 和额外记录时长。
+输出间隔可在头文件中修改 `SYS_ID_PROGRESS_PERIOD_SECONDS`，修改后重新编译。
+
 无窗口手动实验也支持 `Ctrl+C` / `Ctrl+Break` 停止并保存，按实时运行：
 
 ```powershell

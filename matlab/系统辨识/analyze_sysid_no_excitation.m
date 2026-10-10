@@ -39,7 +39,7 @@ clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = 'C:\Users\0\Desktop\轮足\单片机\matlab\读取测试\test0915_6';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\wheelleg\main_github\wheelleg\simulate\LQR_Simulation\logs\disable00100901';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';

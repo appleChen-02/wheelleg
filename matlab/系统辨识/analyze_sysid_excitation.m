@@ -37,7 +37,7 @@ clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = 'C:\Users\0\Desktop\轮足\单片机\matlab\读取测试\test0914_2';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\wheelleg\main_github\wheelleg\simulate\LQR_Simulation\logs\sine01100901';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';
@@ -449,11 +449,20 @@ for kf = 1:Nf
     valid(kf) = true;
     G(:, :, kf) = Syu / Suu;
     for ii = 1:12
-        res = real(Syy(ii, ii)) - real(Syu(ii, :) * (Suu \ Syu(ii, :)'));
-        coh(ii, kf) = min(max(1 - res / max(real(Syy(ii, ii)), eps), 0), 1);
+        powerY = real(Syy(ii, ii));
+        res = powerY - real(Syu(ii, :) * (Suu \ Syu(ii, :)'));
+        % PSD 有物理单位，不能把小于机器 eps 的正功率抬高到 eps。
+        % 理想仿真输出很小，固定绝对下限会使相干度随量纲/幅值而改变。
+        if powerY > 0
+            coh(ii, kf) = min(max(1 - res / powerY, 0), 1);
+        end
         for jj = 1:nU
-            cohPair(ii, jj, kf) = min(max(abs(Syu(ii, jj))^2 / ...
-                max(real(Suu(jj, jj)) * real(Syy(ii, ii)), eps), 0), 1);
+            powerU = real(Suu(jj, jj));
+            if powerY > 0 && powerU > 0
+                % 先按两个功率的平方根归一化，再平方，避免功率乘积过小。
+                normalizedCross = abs(Syu(ii, jj)) / sqrt(powerY) / sqrt(powerU);
+                cohPair(ii, jj, kf) = min(max(normalizedCross^2, 0), 1);
+            end
         end
     end
 end
