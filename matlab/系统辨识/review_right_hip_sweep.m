@@ -1,18 +1,20 @@
 function report = review_right_hip_sweep(rawDir, resultDir, showFigures)
 %REVIEW_RIGHT_HIP_SWEEP 右髋单通道扫频案例的逐项检查与聚焦绘图。
-% 默认读取 sine01100901 / results/20261009_163125。
+% 通常由 analyze_sysid_excitation 在主分析完成后自动调用，使用本次数据/结果目录。
+% 单独无参数运行时，读取下方配置的历史案例目录。
 % 只生成 case_* 补充结果，不修改原始 CSV 或 analyze_sysid_excitation 的输出。
 % 此处频响沿用原结果的输入定义；command 模式的曲线不是独立开环对象列。
 % 用法：cd matlab/系统辨识; review_right_hip_sweep
 % 可选：review_right_hip_sweep(rawDir, resultDir, false) 不保留图窗。
+% 主分析中 cfg.autoReviewRightHip 控制自动调用，cfg.reviewShowFigures 控制图窗显示。
 
 scriptDir = fileparts(mfilename('fullpath'));
 projectDir = fileparts(fileparts(scriptDir));
 if nargin < 1 || isempty(rawDir)
-    rawDir = fullfile(projectDir, 'simulate', 'LQR_Simulation', 'logs', 'sine01100901');
+    rawDir = fullfile(projectDir, 'simulate', 'LQR_Simulation', 'logs', 'sine01101001');
 end
 if nargin < 2 || isempty(resultDir)
-    resultDir = fullfile(scriptDir, 'results', '20261009_163125');
+    resultDir = fullfile(scriptDir, 'results', '20261010_111911');
 end
 if nargin < 3, showFigures = true; end
 

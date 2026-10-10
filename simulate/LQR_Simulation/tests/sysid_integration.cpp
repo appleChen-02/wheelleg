@@ -24,6 +24,58 @@ RobotState StableState() {
     return s;
 }
 
+void CheckLogSweep(mjModel* model, const RobotMap& map, const std::filesystem::path& outdir) {
+    SystemIdentificationParameters p;
+    p.excitation_enable = true;
+    p.excitation_mode = SystemIdentificationExcitation::SineSweep;
+    p.input_mask = 0x01;
+    p.amplitude[0] = 0.1;
+    p.sweep_f0 = 0.2;
+    p.sweep_f1 = 20.0;
+    p.sweep_duration = 240.0;
+    p.min_settle_seconds = p.pre_seconds = p.post_seconds = 0.0;
+    p.stable_seconds = kControlPeriod;
+    const auto state = StableState();
+    SystemIdentificationExperiment e(model, map, outdir / "log_sweep", FeedbackSource::Truth, p);
+    e.Advance(0.0, state);
+    Require(e.Advance(kControlPeriod, state) == std::array<double, 5>{}, "Sweep must start at zero phase");
+    double previous = 0.0;
+    unsigned crossings = 0;
+    unsigned low_frequency_crossings = 0;
+    const unsigned samples = static_cast<unsigned>(std::llround(p.sweep_duration / kControlPeriod));
+    for (unsigned n = 1; n < samples; ++n) {
+        const double tau = n * kControlPeriod;
+        const auto input = e.Advance((n + 1) * kControlPeriod, state);
+        Require(std::isfinite(input[0]) && std::abs(input[0]) <= p.amplitude[0], "Sweep amplitude is invalid");
+        for (int i = 1; i < 5; ++i) Require(input[i] == 0.0, "Sweep leaked into an unselected channel");
+        if (previous < 0.0 && input[0] >= 0.0) {
+            ++crossings;
+            // Invert the integrated frequency at each completed cycle to verify the entire sweep.
+            const double expected = 240.0 / std::log(100.0) *
+                std::log(1.0 + crossings * std::log(100.0) / 48.0);
+            const double observed = tau - kControlPeriod +
+                kControlPeriod * (-previous) / (input[0] - previous);
+            Require(std::abs(observed - expected) < 0.00002, "Log sweep zero crossing timing differs");
+            if (observed < 240.0 * std::log(5.0) / std::log(100.0)) ++low_frequency_crossings;
+        }
+        previous = input[0];
+    }
+    Require(crossings == 1031, "Unexpected total log sweep cycle count");
+    Require(low_frequency_crossings == 41, "Log sweep did not provide 41 complete cycles below 1 Hz");
+    Require(e.Advance(p.sweep_duration + kControlPeriod, state) == std::array<double, 5>{}, "Sweep did not stop at T");
+    Require(e.phase() == SystemIdentificationExperiment::Phase::Complete, "Sweep did not complete");
+    e.Finish("log_sweep_test");
+
+    p.sweep_f0 = 0.0;
+    bool rejected = false;
+    try {
+        SystemIdentificationExperiment invalid(model, map, outdir / "zero_start", FeedbackSource::Truth, p);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    Require(rejected, "Log sweep accepted a zero start frequency");
+}
+
 void RunPhysicalCase(mjModel* model, const RobotMap& map, const std::filesystem::path& outdir,
                      SystemIdentificationParameters p) {
     std::unique_ptr<mjData, decltype(&mj_deleteData)> data(mj_makeData(model), mj_deleteData);
@@ -83,6 +135,7 @@ int main(int argc, char** argv) {
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
         const auto root = std::filesystem::path(argv[2]) / std::to_string(stamp);
 
+        CheckLogSweep(model.get(), map, root);
         SystemIdentificationParameters p;
         p.excitation_mode = SystemIdentificationExcitation::Prbs;
         p.input_mask = 0x1F;
@@ -93,6 +146,13 @@ int main(int argc, char** argv) {
         p.excitation_enable = false;
         p.baseline_duration = 2.0;
         RunPhysicalCase(model.get(), map, root / "no_excitation", p);
+        p.excitation_enable = true;
+        p.excitation_mode = SystemIdentificationExcitation::SineSweep;
+        p.input_mask = 0x10;
+        p.sweep_f0 = 0.2;
+        p.sweep_f1 = 20.0;
+        p.sweep_duration = 2.0;
+        RunPhysicalCase(model.get(), map, root / "sine_sweep", p);
 
         // 稳定确认被运动打断时不得提前启动；超时无激励，不伪报完成。
         p.min_settle_seconds = 0.0;
@@ -114,6 +174,8 @@ int main(int argc, char** argv) {
         }
         // 提前停止保留完整 CSV 表头和未完成标志；姿态越界立即关闭激励。
         p.excitation_enable = true;
+        p.excitation_mode = SystemIdentificationExcitation::Prbs;
+        p.input_mask = 0x1F;
         p.pre_seconds = 0.0;
         p.stable_seconds = 0.002;
         {

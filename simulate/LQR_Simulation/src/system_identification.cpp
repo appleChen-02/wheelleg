@@ -76,10 +76,10 @@ SystemIdentificationExperiment::SystemIdentificationExperiment(
     for (double v : {p.pre_seconds, p.post_seconds, p.min_settle_seconds}) {
         if (!std::isfinite(v) || v < 0.0) throw std::invalid_argument("SYS_ID wait times must be finite and nonnegative");
     }
-    if (!std::isfinite(p.sweep_f0) || !std::isfinite(p.sweep_f1) || p.sweep_f0 < 0.0 ||
+    if (!std::isfinite(p.sweep_f0) || !std::isfinite(p.sweep_f1) || p.sweep_f0 <= 0.0 ||
         p.sweep_f1 <= p.sweep_f0 || p.sweep_f1 >= 125.0 || p.prbs_hold_samples == 0 ||
         (p.input_mask & ~0x1F) != 0 || static_cast<int>(p.excitation_mode) < 0 || static_cast<int>(p.excitation_mode) > 2)
-        throw std::invalid_argument("Invalid SYS_ID frequency, PRBS hold, mode or input mask");
+        throw std::invalid_argument("Invalid SYS_ID frequency (require 0 < f0 < f1 < 125 Hz), PRBS hold, mode or input mask");
     if (HasExcitation()) {
         bool active = false;
         for (int i = 0; i < 5; ++i) {
@@ -225,8 +225,13 @@ std::array<double, 5> SystemIdentificationExperiment::Advance(double time, const
             for (int i = 0; i < 5; ++i) {
                 if (!(parameters_.input_mask & (1U << i))) continue;
                 if (parameters_.excitation_mode == SystemIdentificationExcitation::SineSweep) {
-                    const double phase = 2.0 * std::acos(-1.0) * (parameters_.sweep_f0 * tau +
-                        0.5 * (parameters_.sweep_f1 - parameters_.sweep_f0) / parameters_.sweep_duration * tau * tau);
+                    // f(tau) = f0 * exp(log(f1/f0) * tau/T); phase is its time integral.
+                    // expm1 avoids cancellation when tau is small or f1 is close to f0.
+                    const double log_ratio = std::log1p((parameters_.sweep_f1 - parameters_.sweep_f0) /
+                                                       parameters_.sweep_f0);
+                    const double phase = 2.0 * std::acos(-1.0) * parameters_.sweep_f0 *
+                        parameters_.sweep_duration / log_ratio *
+                        std::expm1(log_ratio * (tau / parameters_.sweep_duration));
                     excitation[i] = parameters_.amplitude[i] * std::sin(phase);
                 } else {
                     excitation[i] = (lfsr_[i] & 1U) ? parameters_.amplitude[i] : -parameters_.amplitude[i];
@@ -351,6 +356,7 @@ void SystemIdentificationExperiment::WriteMetadata(const std::string& reason) {
         << "motor_columns=MCU raw feedback frame; J0/J1/J2/J3 map to simulation actuator indices 1/0/3/2\n"
         << "excitation_enable=" << parameters_.excitation_enable << "\nexcitation_mode=" << static_cast<int>(parameters_.excitation_mode)
         << "\ninput_mask=" << unsigned(parameters_.input_mask)
+        << "\nsweep_law=logarithmic"
         << "\nsweep_f0_hz=" << parameters_.sweep_f0 << "\nsweep_f1_hz=" << parameters_.sweep_f1
         << "\nsweep_duration_s=" << parameters_.sweep_duration << "\nprbs_duration_s=" << parameters_.prbs_duration
         << "\nbaseline_duration_s=" << parameters_.baseline_duration

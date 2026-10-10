@@ -29,6 +29,8 @@ function analyze_sysid_excitation()
 %   summary.csv / excitation_check.csv / operating_point.csv /
 %   frf_input_<通道>.csv / frf_data.mat / data_quality.json / fig_*.png，
 %   并在命令行打印最终结论。
+%   右髋单通道无饱和扫频完成后，自动调用 review_right_hip_sweep，
+%   将 case_* 补充表格和聚焦频响图保存到本次结果目录。
 %
 % 使用：把采集目录放到本脚本同目录的 data/ 下，或将 cfg.dataDir 指向该目录，
 % 然后运行 analyze_sysid_excitation
@@ -37,7 +39,7 @@ clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = 'C:\Users\0\Desktop\wheelleg\main_github\wheelleg\simulate\LQR_Simulation\logs\sine01100901';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\wheelleg\main_github\wheelleg\simulate\LQR_Simulation\logs\sine01101001';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';
@@ -56,6 +58,7 @@ cfg.ampExpected = [0.1, 0, 0, 0, 0];  % 右髋 左髋 右轮 左轮 尾巴 (N*m)
 cfg.sweepF0 = 0.2;              % chirp 起始频率 Hz
 cfg.sweepF1 = 20.0;             % chirp 终止频率 Hz
 cfg.sweepT  = 240.0;             % chirp 时长 s
+cfg.sweepLaw = 'auto';          % auto 读取仿真元数据；无记录时按历史 linear；可指定 logarithmic
 cfg.prbsHoldS = 10 * 0.002;     % PRBS 码元保持时间 s (BIT_HOLD_SAMPLES * 2ms)
 
 cfg.minPreSec  = 5.0;     % 激励前稳态段最短长度，用于估计工作点
@@ -71,6 +74,10 @@ cfg.baselineOpCsv = '';
 cfg.modelMatFile  = '';
 % 辨识输入选择：'command'(总广义输入,推荐) | 'excitation'(外部激励) | 'controller'(仅LQR)
 cfg.frfInput = 'command';
+
+% 主分析完成后，自动复核右髋单通道扫频；其他通道/PRBS/饱和数据自动跳过。
+cfg.autoReviewRightHip = true;
+cfg.reviewShowFigures = true;  % false 只保存 case_*；true 同时保留聚焦图窗。
 
 stateNames = {'body_x','body_x_dot','yaw','yaw_dot', ...
               'left_theta','left_theta_dot','right_theta','right_theta_dot', ...
@@ -90,6 +97,7 @@ issues = {};   % 警告级问题列表
 f12  = fullfile(dataDir, cfg.file12);
 fref = fullfile(dataDir, cfg.fileRef);
 fprintf('[数据] 目录: %s (%s)\n', dataDir, pathNote);
+[cfg.sweepLaw, sweepStartTickS] = resolveSweepLaw(cfg.sweepLaw, dataDir);
 if ~exist(f12, 'file')
     error(['找不到 %s。\n请先用 usb_data_logger.py 采集系统辨识模式数据，' ...
            '并将采集目录放到本脚本同目录的 data/ 下，或修改 cfg.dataDir。'], f12);
@@ -233,6 +241,8 @@ if ~isempty(cfg.tRange)
 end
 
 t = tAll(useMask);  t = t - t(1);
+% 激励按 2 ms 更新、CSV 按 4 ms 采样；首个激励样本可能比真实起点晚一拍。
+cfg.sweepStartS = sweepStartTickS - tick(find(useMask, 1, 'first')) / 1000;
 S = [T12.body_x, T12.body_x_dot, T12.yaw, T12.yaw_dot, ...
      T12.left_theta, T12.left_theta_dot, T12.right_theta, T12.right_theta_dot, ...
      T12.pitch, T12.pitch_dot, T12.tail_beta, T12.tail_beta_dot];
@@ -277,12 +287,12 @@ end
 fs = 1 / median(diff(t(okRow)));
 guard = round(cfg.guardSec * fs);
 
-% 激励段以信号本身为准；信号检测失败时退回 EXCITATION_ACTIVE 标志
-excSig = max(abs(EXC), [], 2) > cfg.excitationAbsTol;
+% 优先用 EXCITATION_ACTIVE 定位，保留扫频起点和中间的零值，避免理论重建相位偏移。
+excSig = bitand(SF, 2) ~= 0;
 i0 = find(excSig, 1, 'first');
 i1 = find(excSig, 1, 'last');
 if isempty(i0)
-    excSig = bitand(SF, 2) ~= 0;
+    excSig = max(abs(EXC), [], 2) > cfg.excitationAbsTol;
     i0 = find(excSig, 1, 'first');
     i1 = find(excSig, 1, 'last');
 end
@@ -515,6 +525,7 @@ summaryRows = {
     'sequence_lost_frames', num2str(nSeqLost)
     'host_time_max_dev_s', num2str(hostDev)
     'excitation_type_detected', excType
+    'sweep_law', cfg.sweepLaw
     'excitation_channels', strjoin(activeNames, ',')
     'excitation_mask', sprintf('0x%s', dec2hex(double(maskMain)))
     'excitation_window_s', sprintf('[%.3f, %.3f]', excT0, excT1)
@@ -578,6 +589,7 @@ dq.sequence_lost_frames = nSeqLost;
 dq.host_time_max_dev_s = hostDev;
 dq.experiment_id = expIdMain;
 dq.excitation = struct('type_detected', excType, 'channels', {activeNames}, ...
+    'sweep_law', cfg.sweepLaw, ...
     'mask', sprintf('0x%s', dec2hex(double(maskMain))), ...
     'window_s', [excT0 excT1], 'duration_s', excDur, ...
     'band_hz', band, 'sweep_finished_flag', double(sweepFinished));
@@ -740,6 +752,27 @@ end
 fprintf('============================================================\n');
 fprintf('全部结果已写入: %s\n', outDir);
 
+% 复核使用本次输入和输出目录，无需修改 review_right_hip_sweep 的默认路径。
+if cfg.autoReviewRightHip
+    if ~strcmp(excType, 'sweep') || ~isscalar(activeIdx) || activeIdx ~= 1
+        fprintf('[自动复核] 跳过：review_right_hip_sweep 仅适用于右髋单通道扫频。\n');
+    elseif any(T12.motor_saturation_mask ~= 0)
+        fprintf('[自动复核] 跳过：右髋案例复核要求整段记录无电机饱和。\n');
+    elseif ~isempty(cfg.tRange)
+        fprintf('[自动复核] 跳过：主分析设置了 cfg.tRange，案例复核使用完整原始记录。\n');
+    elseif ~hasRef
+        fprintf('[自动复核] 跳过：缺少案例复核所需的参考帧文件。\n');
+    else
+        fprintf('\n[自动复核] 运行 review_right_hip_sweep，结果目录: %s\n', outDir);
+        try
+            review_right_hip_sweep(dataDir, outDir, cfg.reviewShowFigures);
+        catch reviewError
+            warning('analyze_sysid_excitation:ReviewFailed', ...
+                '主分析结果已保存，但右髋补充复核失败：%s', reviewError.message);
+        end
+    end
+end
+
 end
 
 %% =================================================================
@@ -817,6 +850,30 @@ Savg = acc / nsegTot;
 f = (0:Nfft/2)' * fs / Nfft;
 end
 
+function [law, startTickS] = resolveSweepLaw(law, dataDir)
+% CSV 的 mode=1 不区分线性/对数扫频；旧仿真和固件数据缺少该元数据时保持线性。
+law = lower(char(law));
+startTickS = NaN;
+metadata = '';
+metadataFile = fullfile(dataDir, 'simulation_experiment.txt');
+if exist(metadataFile, 'file')
+    metadata = fileread(metadataFile);
+    token = regexp(metadata, '(?m)^excitation_start_s=([^\r\n]+)', 'tokens', 'once');
+    if ~isempty(token)
+        value = str2double(token{1});
+        if isfinite(value) && value >= 0, startTickS = value; end
+    end
+end
+if strcmp(law, 'auto')
+    law = 'linear';
+    token = regexp(metadata, '(?m)^sweep_law=([^\r\n]+)', 'tokens', 'once');
+    if ~isempty(token), law = lower(strtrim(token{1})); end
+end
+if ~ismember(law, {'linear', 'logarithmic'})
+    error('cfg.sweepLaw 必须为 auto、linear 或 logarithmic（实际: %s）。', law);
+end
+end
+
 function excCheck = verifyExcitation(EXC, okRow, excSig, t, i0, i1, excType, activeIdx, cfg, inputNames)
 % 激励信号验证：幅值、扫频瞬时频率 / PRBS 电平与码元保持时间
 excCheck = struct();
@@ -839,24 +896,37 @@ for jj = 1:numel(activeIdx)
     ampOK = abs(ampEst - ampExp) <= cfg.ampRelTol * max(ampExp, eps);
 
     if strcmp(excType, 'sweep')
+        if strcmp(cfg.sweepLaw, 'logarithmic') && cfg.sweepF0 <= 0
+            error('对数扫频要求 cfg.sweepF0 > 0。');
+        end
+        sweepStart = t(i0);
+        if isfinite(cfg.sweepStartS), sweepStart = cfg.sweepStartS; end
         % 瞬时频率：上穿零点间隔
         xs = xw(:);
         up = find(xs(1:end-1) < 0 & xs(2:end) >= 0);
         recon = [];
         if numel(up) >= 3
-            tUp = tw(up);
+            % 插值零点，避免 4 ms 采样量化导致高频周期估计误差。
+            tUp = tw(up) - xs(up) .* (tw(up+1) - tw(up)) ./ (xs(up+1) - xs(up));
             per = diff(tUp);
             tIf = (tUp(1:end-1) + tUp(2:end)) / 2;
             ifreq = 1 ./ per;
-            % 线性拟合 f(t) = a*t + b，斜率应 ≈ (f1-f0)/T
-            pFit = polyfit(tIf, ifreq, 1);
-            slopeExp = (cfg.sweepF1 - cfg.sweepF0) / cfg.sweepT;
-            fAtStart = polyval(pFit, t(i0));
-            fAtEnd = polyval(pFit, t(i1));
+            if strcmp(cfg.sweepLaw, 'logarithmic')
+                % ln(f) 随时间线性变化，斜率为 ln(f1/f0)/T（单位 1/s）。
+                pFit = polyfit(tIf - sweepStart, log(ifreq), 1);
+                slopeExp = log1p((cfg.sweepF1 - cfg.sweepF0) / cfg.sweepF0) / cfg.sweepT;
+                fAtStart = exp(polyval(pFit, t(i0) - sweepStart));
+                fAtEnd = exp(polyval(pFit, t(i1) - sweepStart));
+            else
+                pFit = polyfit(tIf - sweepStart, ifreq, 1);
+                slopeExp = (cfg.sweepF1 - cfg.sweepF0) / cfg.sweepT;
+                fAtStart = polyval(pFit, t(i0) - sweepStart);
+                fAtEnd = polyval(pFit, t(i1) - sweepStart);
+            end
             slopeOK = abs(pFit(1) - slopeExp) <= 0.3 * max(slopeExp, eps);
             excCheck.rows{end+1} = sprintf( ...
-                '%-14s sweep: amp=%.3f/%.3f N*m %s, f(%.1fs)=%.2f Hz, f(%.1fs)=%.2f Hz, slope=%.3f (期望 %.3f) %s', ...
-                inputNames{ch}, ampEst, ampExp, ternary(ampOK, 'OK', 'MISMATCH'), ...
+                '%-14s %s sweep: amp=%.3f/%.3f N*m %s, f(%.1fs)=%.2f Hz, f(%.1fs)=%.2f Hz, slope=%.3f (期望 %.3f) %s', ...
+                inputNames{ch}, cfg.sweepLaw, ampEst, ampExp, ternary(ampOK, 'OK', 'MISMATCH'), ...
                 t(i0), fAtStart, t(i1), fAtEnd, pFit(1), slopeExp, ...
                 ternary(slopeOK, 'OK', 'MISMATCH')); %#ok<AGROW>
             if abs(fAtStart - cfg.sweepF0) > 1.0
@@ -870,10 +940,14 @@ for jj = 1:numel(activeIdx)
                     inputNames{ch}, t(i1) - t(i0), cfg.sweepT); %#ok<AGROW>
             end
             % 理论 chirp 重建（用于图 1 叠加对比）
-            tau = tWin - t(i0);
-            recon = ampEst .* sin(2 * pi * (cfg.sweepF0 .* tau + ...
-                0.5 * (cfg.sweepF1 - cfg.sweepF0) / cfg.sweepT .* tau.^2)) .* ...
-                (tau >= 0 & tau <= cfg.sweepT);
+            tau = tWin - sweepStart;
+            if strcmp(cfg.sweepLaw, 'logarithmic')
+                logRatio = log1p((cfg.sweepF1 - cfg.sweepF0) / cfg.sweepF0);
+                cycles = cfg.sweepF0 * cfg.sweepT / logRatio .* expm1(logRatio .* tau / cfg.sweepT);
+            else
+                cycles = cfg.sweepF0 .* tau + 0.5 * (cfg.sweepF1 - cfg.sweepF0) / cfg.sweepT .* tau.^2;
+            end
+            recon = ampEst .* sin(2 * pi * cycles) .* (tau >= 0 & tau <= cfg.sweepT);
         else
             excCheck.rows{end+1} = sprintf( ...
                 '%-14s sweep: 上穿零点不足，无法估计瞬时频率（段太短或幅值太小）', ...

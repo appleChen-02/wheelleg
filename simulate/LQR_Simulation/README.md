@@ -101,8 +101,13 @@ LQR 增益、平衡角与静态力矩系数采用现有固件 TAIL_VERSION=1 的
 ## 系统辨识数据采集
 
 参数集中在 `src/system_identification_param.h`，修改后执行 `cmake --build build --parallel`。
-默认实验为：固定双足工作点，尾巴通道 `mask=0x10`、幅值 `0.05 N*m`、线性扫频 `0.2→20 Hz / 60 s`。
+当前头文件配置为：固定双足工作点，左髋通道 `mask=0x02`、幅值 `0.2 N*m`、对数扫频 `0.2→20 Hz / 240 s`。
 该功能完成激励与数据采集，A/B 矩阵拟合仍在 MATLAB 中执行。
+
+`SineSweep` 的瞬时频率为 `f(t)=f0*exp(ln(f1/f0)*t/T)`，正弦相位使用该频率的时间积分。
+相同频率倍率的区间占用相同时间；上述参数在 `0.2～1 Hz` 段停留约 `83.9 s`、包含约 `41.7` 个周期，原线性扫频只有约 `9.7 s`、`5.8` 个周期。
+起始频率必须大于零。对数扫频增加低频周期，但各倍频程的周期数仍不同；需要更多低频周期时可继续增加扫频时长。
+实验记录 `simulation_experiment.txt` 新增 `sweep_law=logarithmic`，CSV 的模式编码仍为 `SineSweep=1`。
 
 从本项目目录运行带窗口的手动停止实验：
 
@@ -138,11 +143,11 @@ cmake --build build --parallel
 可重复验证或批量采集时指定总仿真时长，无窗口会加速运行：
 
 ```powershell
-.\build\LQRSimulation.exe --mode sysid --headless --duration 110 --outdir logs/tail_sweep_003
-.\build\LQRSimulation.exe --mode sysid --headless --duration 110 --feedback mcu --outdir logs/tail_sweep_mcu_001
+.\build\LQRSimulation.exe --mode sysid --headless --duration 400 --outdir logs/log_sweep_003
+.\build\LQRSimulation.exe --mode sysid --headless --duration 400 --feedback mcu --outdir logs/log_sweep_mcu_001
 ```
 
-`--duration` 包含启动等待、基线、激励及结束响应。默认实验实测约 99 s 达到采集完成，因此 110 s 可用于当前模型验证；修改模型或参数后应检查是否出现完成提示。
+`--duration` 包含启动等待、基线、激励及结束响应。当前扫频的记录阶段至少需要 `10+240+10=260 s`，另外还要等待稳定；上例留出稳定等待时间，运行后仍应检查是否出现完成提示。
 提前停止或超时/姿态越界会保存已有数据，并在实验记录中标记未完成/中止。已存在日志的目录会报错，避免覆盖旧实验。
 
 常用头文件配置：
@@ -153,7 +158,7 @@ cmake --build build --parallel
 | `SYS_ID_EXCITATION_MODE` | `SineSweep` 或 `Prbs` |
 | `SYS_ID_EXCITATION_INPUT_MASK` | 单通道：右髋 `0x01`、左髋 `0x02`、右轮 `0x04`、左轮 `0x08`、尾巴 `0x10`；五通道 PRBS：`0x1F` |
 | `SYS_ID_EXCITATION_AMPLITUDE` | 依次为右髋、左髋、右轮、左轮、尾巴的峰值力矩 |
-| `SYS_ID_SINE_SWEEP_*` | 起止频率和扫频时长；默认 60 s，现有 MATLAB 配置为 240 s，分析时必须同步 |
+| `SYS_ID_SINE_SWEEP_*` | 对数扫频起止频率（`0<f0<f1<125 Hz`）和时长；当前 240 s，分析时必须同步 |
 | `SYS_ID_PRBS_BIT_HOLD_SAMPLES` / `SYS_ID_PRBS_DURATION` | 码元保持控制拍数 / 激励时长；默认 10 拍即 20 ms / 120 s |
 | `SYS_ID_PRBS_SEEDS` | 与固件相同的 16 位 LFSR 算法；同配置可复现，验证实验可换种子 |
 | `SYS_ID_LEG_LENGTH` / `SYS_ID_REFERENCE` | 腿长和 18 项参考；前 12 项为 LQR 状态，腿角参考还会叠加模型 `theta_eq`；参考速度必须为零 |
@@ -181,19 +186,23 @@ cmake --build build --parallel
 
 ```matlab
 cfg.dataDir = 'C:\...\simulate\LQR_Simulation\logs\tail_sweep_001';
-cfg.ampExpected = [0, 0, 0, 0, 0.05];
+cfg.ampExpected = [0, 0.2, 0, 0, 0];
 cfg.sweepF0 = 0.2;
 cfg.sweepF1 = 20;
-cfg.sweepT = 60;
+cfg.sweepT = 240;
+cfg.sweepLaw = 'auto'; % 读取 simulation_experiment.txt 的 sweep_law；也可指定 logarithmic
 cfg.legLength = 0.18;
 ```
 
 无激励采集使用 `analyze_sysid_no_excitation.m`，同样设置 `cfg.dataDir` 和腿长。
+`auto` 在元数据没有 `sweep_law` 时按 `linear` 分析，兼容旧仿真和当前固件数据；若只复制新实验的 CSV，需手动指定 `cfg.sweepLaw='logarithmic'`。
+右髋单通道、无电机饱和、未设置 `cfg.tRange` 且有参考帧的扫频实验，在主分析结束后自动调用 `review_right_hip_sweep(dataDir, outDir, false)`，将 `case_*` 补充表格和聚焦频响图保存到本次结果目录。
+无需修改复核脚本的默认路径；`cfg.autoReviewRightHip=false` 可关闭自动复核，`cfg.reviewShowFigures=true` 可保留复核图窗。其他实验会打印跳过原因；补充复核失败会发出警告，主分析结果仍保留。
 CSV 兼容允许复用数据准备流程；完整开环 A/B 的估计还需要考虑其他闭环输入、MIMO 激励与独立验证，单通道频响不能直接当成完整开环模型。
 
 ## 辨识接口验证
 
-集成检查覆盖真实 MuJoCo 下的五通道 PRBS、无激励采集、固定增益工作点、电机限幅，以及稳定超时、提前停止、姿态越界：
+集成检查覆盖对数扫频零交叉时刻和低频周期数、真实 MuJoCo 下的扫频/五通道 PRBS/无激励采集、固定增益工作点、电机限幅，以及稳定超时、提前停止、姿态越界：
 
 ```powershell
 cmake -S . -B build -DLQR_BUILD_SYSID_TESTS=ON
@@ -204,5 +213,5 @@ ctest --test-dir build --output-on-failure
 如 Python 已配置，可对完整实验校验 USB CSV 列顺序、250 Hz 采样、sequence、激励波形、输入分解和实际力矩（只用标准库）：
 
 ```powershell
-python tests/validate_sysid_csv.py logs/tail_sweep_003
+python tests/validate_sysid_csv.py logs/log_sweep_003
 ```

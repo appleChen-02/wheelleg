@@ -13,7 +13,7 @@
  *   - 修改参数后必须重新编译，并重新启动程序；运行中的实验不会自动更新参数。
  *   - 仅修改数值时不需要重新执行 cmake -S ...，也不需要删除 build 目录。
  *   - 仅修改注释不影响行为；已编译程序可以继续使用原来的参数。
- *   - 分析时同步 MATLAB 的 cfg.ampExpected、sweepF0/sweepF1/sweepT、
+ *   - 分析时同步 MATLAB 的 cfg.ampExpected、sweepF0/sweepF1/sweepT、sweepLaw、
  *     prbsHoldS、legLength；这些 MATLAB 配置不会自动随本文件更新。
  *
  * 实验时序（各时长均为仿真时间，不是程序运行的墙钟时间）：
@@ -35,9 +35,10 @@
 #include <cstdint>
 
 // 数值与固件的激励类型一致，也用于 CSV 的 excitation_config 编码。
+// 仿真的 SineSweep 使用对数扫频；扫频规律另存于 simulation_experiment.txt。
 enum class SystemIdentificationExcitation {
     Disabled = 0,   // 不施加激励，正式采集阶段采用 BASELINE_DURATION。
-    SineSweep = 1,  // 线性正弦扫频：频率随时间线性增加，幅值保持不变。
+    SineSweep = 1,  // 对数正弦扫频：频率随时间指数增加，幅值保持不变。
     Prbs = 2       // 伪随机二进制序列：在 +幅值/-幅值之间按码元切换。
 };
 
@@ -101,7 +102,7 @@ inline constexpr auto SYS_ID_EXCITATION_MODE = SystemIdentificationExcitation::S
 // 组合示例：0x03 双髋，0x0C 双轮，0x1F 五通道。不要使用 bit5/bit6。
 // 多通道扫频具有相同相位和频率，输入高度相关，不宜用来拟合完整 MIMO 模型；
 // 单通道探索用扫频，全通道实验用不同种子的 PRBS，并检查输入相关性。
-inline constexpr std::uint8_t SYS_ID_EXCITATION_INPUT_MASK = 0x02;
+inline constexpr std::uint8_t SYS_ID_EXCITATION_INPUT_MASK = 0x01;
 
 // 顺序为 [右髋 Tp, 左髋 Tp, 右轮 T, 左轮 T, 尾巴 T]，单位 N*m。
 // 每个值是非负峰值 A，不是峰峰值；正弦范围 [-A,A]，PRBS 两电平为 ±A。
@@ -109,11 +110,12 @@ inline constexpr std::uint8_t SYS_ID_EXCITATION_INPUT_MASK = 0x02;
 // MASK 未选中时对应幅值不生效；ENABLE=true 时至少选中一路非零幅值。
 // 增大幅值前检查状态偏移和饱和日志；VMC 映射后的电机力矩可能先达到限幅。
 // 同步 MATLAB cfg.ampExpected；默认尾巴实验可设为 [0,0,0,0,0.05]。
-inline constexpr std::array<double, 5> SYS_ID_EXCITATION_AMPLITUDE = {0.1, 0.2, 0.1, 0.1, 0.05};
+inline constexpr std::array<double, 5> SYS_ID_EXCITATION_AMPLITUDE = {1.0, 0.2, 0.1, 0.1, 0.05};
 
 // -------------------- 3. 正弦扫频 --------------------
 
-// 起始瞬时频率 f0，Hz，必须 >=0；通常取 0.2 Hz 以覆盖低频动态。
+// 起始瞬时频率 f0，Hz，必须 >0（对数扫频不能从 0 Hz 开始）。
+// 通常取 0.2 Hz 以覆盖低频动态。
 inline constexpr double SYS_ID_SINE_SWEEP_START_FREQ = 0.2;
 
 // 结束瞬时频率 f1，Hz；必须 >f0 且 <125 Hz（250 Hz 日志的奈奎斯特频率）。
@@ -122,10 +124,12 @@ inline constexpr double SYS_ID_SINE_SWEEP_END_FREQ = 20.0;
 
 // 从 f0 到 f1 的扫频时长 T，s，必须 >0；只在 SineSweep 模式决定激励时长。
 // 激励起点 tau=0 是激励前基线结束的时刻，不是程序启动时刻。
-//   f(tau)=f0+(f1-f0)*tau/T；
-//   e(tau)=A*sin(2*pi*(f0*tau+0.5*(f1-f0)*tau^2/T))。
+//   r=f1/f0，L=ln(r)；f(tau)=f0*exp(L*tau/T)；
+//   e(tau)=A*sin(2*pi*f0*T/L*(exp(L*tau/T)-1))。
+// 相同频率倍率的区间占用相同时间，因此低频比线性扫频获得更多周期。
+// 0.2→20 Hz、240 s 时，0.2～1 Hz 段约有 41.7 周期（线性约 5.8）。
 // 到 T 后激励归零，进入结束响应阶段，控制器继续运行。
-// 本项目默认 60 s；现有 MATLAB 脚本 cfg.sweepT 为 240 s，必须按实验同步。
+// 当前时长 240 s；分析时同步 cfg.sweepT，并使用 logarithmic 扫频规律。
 inline constexpr double SYS_ID_SINE_SWEEP_DURATION = 240.0;
 
 // -------------------- 4. PRBS --------------------

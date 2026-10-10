@@ -75,7 +75,14 @@ def validate(directory, schema):
                 tau = time - start
                 if mode == 1:
                     f0, f1, duration = [float(metadata[k]) for k in ("sweep_f0_hz", "sweep_f1_hz", "sweep_duration_s")]
-                    expected = amplitude * math.sin(2 * math.pi * (f0 * tau + 0.5 * (f1 - f0) / duration * tau * tau))
+                    law = metadata.get("sweep_law", "linear")  # Historical captures used linear sweeps.
+                    if law == "logarithmic":
+                        log_ratio = math.log1p((f1 - f0) / f0)
+                        cycles = f0 * duration / log_ratio * math.expm1(log_ratio * tau / duration)
+                    else:
+                        assert law == "linear", f"Unknown sweep law: {law}"
+                        cycles = f0 * tau + 0.5 * (f1 - f0) / duration * tau * tau
+                    expected = amplitude * math.sin(2 * math.pi * cycles)
                 else:
                     expected = amplitude * prbs[round(tau / 0.002) // hold][i]
             max_wave_error = max(max_wave_error, abs(row["excitation_" + ch] - expected))
