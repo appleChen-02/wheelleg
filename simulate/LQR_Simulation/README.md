@@ -196,8 +196,8 @@ cfg.legLength = 0.18;
 
 无激励采集使用 `analyze_sysid_no_excitation.m`，同样设置 `cfg.dataDir` 和腿长。
 `auto` 在元数据没有 `sweep_law` 时按 `linear` 分析，兼容旧仿真和当前固件数据；若只复制新实验的 CSV，需手动指定 `cfg.sweepLaw='logarithmic'`。
-右髋单通道、无电机饱和、未设置 `cfg.tRange` 且有参考帧的扫频实验，在主分析结束后自动调用 `review_right_hip_sweep(dataDir, outDir, false)`，将 `case_*` 补充表格和聚焦频响图保存到本次结果目录。
-无需修改复核脚本的默认路径；`cfg.autoReviewRightHip=false` 可关闭自动复核，`cfg.reviewShowFigures=true` 可保留复核图窗。其他实验会打印跳过原因；补充复核失败会发出警告，主分析结果仍保留。
+主分析直接输出 `state_metrics.csv`（相对激励前均值的波动/峰值/偏移）、`motor_margin.csv`（电机峰值/限幅比例/余量/饱和帧数）和 `input_consistency.csv`（五路输入分解及实际输入误差），并为每个激励通道保存 `fig6_frf_focus_<通道>.png`。
+这些诊断共用主分析的时间截取和有效帧掩码，适用于各通道扫频及 PRBS；时域诊断包含有效饱和帧，频响仍只用连续无饱和分段。`cfg.focusStateIdx` 设置聚焦状态，`cfg.focusShowFigures` 控制图窗显示，`cfg.motorTorqueLimits` 设置电机限幅。缺少激励前基线或参考输入时，相应指标为 NaN。主分析不再调用 `review_right_hip_sweep`；历史复核脚本可单独手动运行。
 CSV 兼容允许复用数据准备流程；完整开环 A/B 的估计还需要考虑其他闭环输入、MIMO 激励与独立验证，单通道频响不能直接当成完整开环模型。
 
 ## 辨识接口验证

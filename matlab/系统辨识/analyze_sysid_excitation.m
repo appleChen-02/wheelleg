@@ -29,8 +29,8 @@ function analyze_sysid_excitation()
 %   summary.csv / excitation_check.csv / operating_point.csv /
 %   frf_input_<通道>.csv / frf_data.mat / data_quality.json / fig_*.png，
 %   并在命令行打印最终结论。
-%   右髋单通道无饱和扫频完成后，自动调用 review_right_hip_sweep，
-%   将 case_* 补充表格和聚焦频响图保存到本次结果目录。
+%   state_metrics.csv / motor_margin.csv / input_consistency.csv /
+%   fig6_frf_focus_<通道>.png 提供状态波动、偏移、电机余量和聚焦频响。
 %
 % 使用：把采集目录放到本脚本同目录的 data/ 下，或将 cfg.dataDir 指向该目录，
 % 然后运行 analyze_sysid_excitation
@@ -39,7 +39,7 @@ clc; close all;
 
 %% ============================== 配置 ==============================
 cfg = struct();
-cfg.dataDir  = 'C:\Users\0\Desktop\wheelleg\main_github\wheelleg\simulate\LQR_Simulation\logs\sine01101001';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
+cfg.dataDir  = 'C:\Users\0\Desktop\wheelleg\main_github\wheelleg\simulate\LQR_Simulation\logs\sine01101104';        % '' = 自动搜索（脚本目录、脚本目录/data、上位机/log）
 cfg.file12   = 'system_identification_12.csv';
 cfg.fileRef  = 'system_identification_reference.csv';
 cfg.outRoot  = 'results';
@@ -75,9 +75,11 @@ cfg.modelMatFile  = '';
 % 辨识输入选择：'command'(总广义输入,推荐) | 'excitation'(外部激励) | 'controller'(仅LQR)
 cfg.frfInput = 'command';
 
-% 主分析完成后，自动复核右髋单通道扫频；其他通道/PRBS/饱和数据自动跳过。
-cfg.autoReviewRightHip = true;
-cfg.reviewShowFigures = true;  % false 只保存 case_*；true 同时保留聚焦图窗。
+% 聚焦频响：每个激励通道一张，依次为右腿摆角、pitch、左腿摆角、尾角。
+cfg.focusStateIdx = [7, 9, 5, 11];  % 使用下方 stateNames 的 1～12 状态索引。
+cfg.focusShowFigures = true;       % false 只保存图片；true 同时保留聚焦图窗。
+% 电机反馈峰值与限幅比较，单位 N*m；模型/固件限幅改变后同步此处。
+cfg.motorTorqueLimits = [40, 40, 40, 40, 4.5, 4.5, 7];  % J0/J1/J2/J3/W0/W1/Tail
 
 stateNames = {'body_x','body_x_dot','yaw','yaw_dot', ...
               'left_theta','left_theta_dot','right_theta','right_theta_dot', ...
@@ -398,6 +400,44 @@ if hasRef && height(Tref) > 0
     end
 end
 
+%% ======================= 状态与输入诊断 ==========================
+% 与主分析共用时间截取、过零点和有效帧掩码；时域统计包含有限的饱和帧。
+preValid = preMask & okRow;
+excValid = excSig & okRow;
+postValid = postMask & okRow;
+phaseValidSeconds = [nnz(preValid), nnz(excValid), nnz(postValid)] / fs;
+preStd = std(S(preValid, :), 0, 1);
+if nnz(preValid) < 2, preStd(:) = NaN; end
+excStd = std(S(excValid, :), 0, 1);
+peakFromPre = max(abs(S(excValid, :) - xPre), [], 1);
+stdRatio = nan(1, 12);
+nonzeroPreStd = preStd > 0;
+stdRatio(nonzeroPreStd) = excStd(nonzeroPreStd) ./ preStd(nonzeroPreStd);
+stateMetrics = table(stateNames(:), units12(:), xPre(:), preStd(:), excStd(:), ...
+    peakFromPre(:), (xExc - xPre)', (xPost - xPre)', stdRatio(:), ...
+    'VariableNames', {'state','unit','mean_pre','std_pre','std_excitation', ...
+    'peak_abs_delta_from_pre','mean_shift_excitation','mean_shift_post','std_ratio_excitation_to_pre'});
+
+assert(numel(cfg.motorTorqueLimits) == 7 && all(isfinite(cfg.motorTorqueLimits)) && ...
+    all(cfg.motorTorqueLimits > 0), 'cfg.motorTorqueLimits must contain 7 finite positive limits.');
+limits = cfg.motorTorqueLimits(:);
+motorPeak = max(abs(MOTOR(excValid, :)), [], 1)';
+motorSaturation = zeros(7, 1);
+for k = 1:7, motorSaturation(k) = sum(bitand(SAT(excValid), 2^(k-1)) ~= 0); end
+motorMargin = table(motorNames(:), limits, motorPeak, 100 * motorPeak ./ limits, ...
+    limits - motorPeak, motorSaturation, ...
+    'VariableNames', {'motor','limit_Nm','peak_abs_excitation_Nm','peak_percent_of_limit', ...
+    'remaining_to_limit_Nm','saturation_frames_excitation'});
+
+% 缺少平衡输入时分解残差为 NaN；actual-command 仍可独立检查。
+inputResidualByChannel = max(abs(C(okRow, :) - U(okRow, :) - EXC(okRow, :) - equil5), [], 1);
+actualErrorByChannel = max(abs(A(okRow, :) - C(okRow, :)), [], 1);
+inputResidualMax = max(inputResidualByChannel);
+actualErrorMax = max(actualErrorByChannel);
+inputConsistency = table(inputNames(:), equil5(:), inputResidualByChannel(:), actualErrorByChannel(:), ...
+    'VariableNames', {'channel','equilibrium_Nm','max_abs_command_decomposition_residual_Nm', ...
+    'max_abs_actual_minus_command_Nm'});
+
 %% ====================== 干净分段（Welch 输入） ====================
 % 饱和/异常/非有限帧作为分段边界，不删除帧，避免时间轴空洞
 Nwin = max(64, round(cfg.winSec * fs));
@@ -530,6 +570,11 @@ summaryRows = {
     'excitation_mask', sprintf('0x%s', dec2hex(double(maskMain)))
     'excitation_window_s', sprintf('[%.3f, %.3f]', excT0, excT1)
     'excitation_duration_s', num2str(excDur)
+    'pre_valid_duration_s', num2str(phaseValidSeconds(1))
+    'excitation_valid_duration_s', num2str(phaseValidSeconds(2))
+    'post_valid_duration_s', num2str(phaseValidSeconds(3))
+    'input_decomposition_residual_max_Nm', num2str(inputResidualMax)
+    'actual_minus_command_max_Nm', num2str(actualErrorMax)
     'analysis_band_hz', sprintf('[%.2f, %.2f]', band(1), band(2))
     'frf_input_source', cfg.frfInput
     'welch_window_s', num2str(cfg.winSec)
@@ -557,6 +602,11 @@ opT = table(stateNames(:), xExc(:), xPre(:), xPost(:), xOp(:), ...
     'VariableNames', {'state','mean_excitation_window','mean_pre','mean_post','x_op_used','source'});
 writeCsv(opT, fullfile(outDir, 'operating_point.csv'));
 
+% ---- 状态指标 / 电机余量 / 五路输入一致性 ----
+writeCsv(stateMetrics, fullfile(outDir, 'state_metrics.csv'));
+writeCsv(motorMargin, fullfile(outDir, 'motor_margin.csv'));
+writeCsv(inputConsistency, fullfile(outDir, 'input_consistency.csv'));
+
 % ---- frf_input_<通道>.csv ----
 for jj = 1:nU
     magD = abs(squeeze(G(:, jj, :)));
@@ -574,7 +624,7 @@ end
 % ---- frf_data.mat（供后续参数模型拟合） ----
 save(fullfile(outDir, 'frf_data.mat'), 'f', 'G', 'coh', 'cohPair', 'valid', 'band', ...
      'activeIdx', 'activeNames', 'stateNames', 'inputNames', 'fs', 'df', ...
-     'nsegTot', 'cfg', 'Gmodel', '-v7');
+     'nsegTot', 'cfg', 'Gmodel', 'stateMetrics', 'motorMargin', 'inputConsistency', '-v7');
 
 % ---- data_quality.json ----
 dq = struct();
@@ -609,6 +659,8 @@ dq.welch = struct('window_s', cfg.winSec, 'overlap', cfg.overlapFrac, ...
     'frames_dropped_in_window', nFramesDropped);
 dq.frf = struct('input_source', cfg.frfInput, 'channels', {activeNames}, ...
     'band_avg_coherence', names2struct(stateNames, bandCoh));
+dq.input_consistency = struct('command_decomposition_max_Nm', inputResidualMax, ...
+    'actual_minus_command_max_Nm', actualErrorMax);
 dq.issues = issues;
 dqJson = jsonencode(dq, 'PrettyPrint', true);
 fq = fopen(fullfile(outDir, 'data_quality.json'), 'w');
@@ -685,6 +737,45 @@ for jj = 1:nU
     grid on; ylabel('phase (deg)'); xlabel('f (Hz)');
     title(sprintf('FRF phase: %s -> states', activeNames{jj}), 'Interpreter', 'none');
     savefigPng(fh4, fullfile(outDir, sprintf('fig4_frf_phase_%s.png', activeNames{jj})));
+
+    % 图6: 关键状态分别显示幅值、相位和相干度，低于 0.8 的频点标橙色。
+    focusIdx = cfg.focusStateIdx(:)';
+    assert(~isempty(focusIdx) && all(ismember(focusIdx, 1:12)), ...
+        'cfg.focusStateIdx must contain state indices from 1 to 12.');
+    visibility = 'off';
+    if cfg.focusShowFigures, visibility = 'on'; end
+    fh6 = figure('Visible',visibility,'Position',[100 100 1250 260*numel(focusIdx)],'Color','w');
+    layout = tiledlayout(fh6, numel(focusIdx), 3, 'TileSpacing','compact','Padding','compact');
+    focusBand = bandSel & f > 0;
+    freq = f(focusBand);
+    for row = 1:numel(focusIdx)
+        k = focusIdx(row);
+        response = squeeze(G(k, jj, :));
+        % 多输入时为给定全部激励输入的多重相干度；单输入时等于普通相干度。
+        coherence = coh(k, :)';
+        values = {abs(response(focusBand)), unwrap(angle(response(focusBand)))*180/pi, coherence(focusBand)};
+        low = coherence(focusBand) < 0.8;
+        labels = {sprintf('Magnitude [%s/(N m)]', units12{k}), 'Phase [deg]', 'Multiple coherence'};
+        for column = 1:3
+            ax = nexttile(layout, (row-1)*3 + column);
+            if column == 1
+                loglog(ax, freq, values{column}, 'LineWidth',1.2);
+            else
+                semilogx(ax, freq, values{column}, 'LineWidth',1.2);
+            end
+            hold(ax, 'on');
+            plot(ax, freq(low), values{column}(low), 'o', 'Color',[0.85 0.35 0.1],'MarkerSize',4);
+            if column == 3
+                yline(ax, 0.8, '--'); yline(ax, 0.5, ':'); ylim(ax, [0 1.05]);
+            end
+            grid(ax, 'on'); xlim(ax, band); ylabel(ax, labels{column});
+            title(ax, stateNames{k}, 'Interpreter','none');
+            if row == numel(focusIdx), xlabel(ax, 'Frequency [Hz]'); end
+        end
+    end
+    title(layout, sprintf('FRF focus: %s (%s); orange points: coherence <0.8\nClosed-loop experiment; multiple coherence uses all selected inputs', ...
+        activeNames{jj}, cfg.frfInput), 'Interpreter','none');
+    savefigPng(fh6, fullfile(outDir, sprintf('fig6_frf_focus_%s.png', activeNames{jj})), cfg.focusShowFigures);
 end
 
 % 图5: 多重相干 + 输入 PSD（频带覆盖）
@@ -716,6 +807,13 @@ fprintf('数据: %s, %.1f Hz, 全部 %d 帧, 使用 %d 帧\n', dataDir, fs, heig
 fprintf('激励: %s, 通道 [%s], 区间 [%.2f, %.2f] s, 时长 %.1f s\n', ...
     excTypeLabel, strjoin(activeNames, ','), excT0, excT1, excDur);
 fprintf('丢帧率 %.3f%% (tick), sequence 缺帧 %d, 饱和 %d 帧\n', 100*dropRate, nSeqLost, nSat);
+fprintf('激励前/激励中/激励后有效样本时长: %.3f / %.3f / %.3f s（样本数/采样率，基线含保护间隔扣除）\n', ...
+    phaseValidSeconds);
+fprintf('输入一致性: max |command-controller-equilibrium-excitation| = %.3g N*m\n', inputResidualMax);
+fprintf('            max |actual-command| = %.3g N*m\n', actualErrorMax);
+if ~all(isfinite(equil5))
+    fprintf('平衡输入缺失，输入分解残差记为 NaN；actual-command 检查仍有效。\n');
+end
 fprintf('\n--- 1) 激励信号验证 ---\n');
 for jj = 1:numel(excCheck.rows)
     fprintf('  %s\n', excCheck.rows{jj});
@@ -726,22 +824,27 @@ for k = 1:12
     fprintf('%-16s %12.5f %12.5f %12.5f %+12.5f\n', ...
         stateNames{k}, xOp(k), xExc(k), xPre(k), xExc(k) - xOp(k));
 end
-fprintf('\n--- 3) 激励频带内平均相干度 (band %.2f-%.2f Hz) ---\n', band(1), band(2));
+fprintf('\n重点状态波动与偏移（相对激励前均值；完整 12 状态见 state_metrics.csv）：\n');
+disp(stateMetrics(ismember(stateMetrics.state, {'body_x','left_theta','right_theta','pitch','tail_beta'}), :));
+fprintf('基线样本不足或标准差为零时，标准差比记为 NaN。\n');
+fprintf('\n--- 3) 电机余量（有效激励帧，包含饱和帧）---\n');
+disp(motorMargin);
+fprintf('\n--- 4) 激励频带内平均相干度 (band %.2f-%.2f Hz) ---\n', band(1), band(2));
 [~, order] = sort(bandCoh, 'descend');
 for k = order(:)'
     fprintf('%-16s gamma2=%.3f %s\n', stateNames{k}, bandCoh(k), ...
         ternary(bandCoh(k) >= 0.8, '(good)', ...
         ternary(bandCoh(k) >= 0.5, '(acceptable)', '(poor)')));
 end
-fprintf('\n--- 4) 频响估计设置 ---\n');
+fprintf('\n--- 5) 频响估计设置 ---\n');
 fprintf('输入源: %s (%s), Welch 窗 %.1f s, 分辨率 %.3f Hz, %d 段 / %d 个干净分段\n', ...
     cfg.frfInput, strjoin(activeNames, ','), cfg.winSec, df, nsegTot, numel(runs));
 fprintf('激励段内因饱和/异常丢弃 %d 帧（分段处理，未删帧）\n', nFramesDropped);
-fprintf('\n--- 5) 解读提示 ---\n');
+fprintf('\n--- 6) 解读提示 ---\n');
 fprintf('1. 只解读频带 [%.2f, %.2f] Hz 内且 gamma2 >= 0.5 的频响；\n', band(1), band(2));
 fprintf('2. 低于 %.2f Hz（约 2/窗长）的频响受窗长限制，不可信；\n', 2/cfg.winSec);
 fprintf('3. 闭环直接法频响含反馈噪声偏差，激励幅值越大偏差越小；\n');
-fprintf('4. 线性范围检查：用不同幅值重复实验，对比 FRF 是否重合；\n');
+fprintf('4. 单一幅值只验证当前实验条件；线性范围须用不同幅值重复实验，对比 FRF 是否重合；\n');
 fprintf('5. frf_data.mat 已保存（f/G/coh），可直接用于参数模型拟合。\n');
 if ~isempty(issues)
     fprintf('\n*** 数据质量问题 (%d 条, 详见 data_quality.json) ***\n', numel(issues));
@@ -751,27 +854,8 @@ if ~isempty(issues)
 end
 fprintf('============================================================\n');
 fprintf('全部结果已写入: %s\n', outDir);
-
-% 复核使用本次输入和输出目录，无需修改 review_right_hip_sweep 的默认路径。
-if cfg.autoReviewRightHip
-    if ~strcmp(excType, 'sweep') || ~isscalar(activeIdx) || activeIdx ~= 1
-        fprintf('[自动复核] 跳过：review_right_hip_sweep 仅适用于右髋单通道扫频。\n');
-    elseif any(T12.motor_saturation_mask ~= 0)
-        fprintf('[自动复核] 跳过：右髋案例复核要求整段记录无电机饱和。\n');
-    elseif ~isempty(cfg.tRange)
-        fprintf('[自动复核] 跳过：主分析设置了 cfg.tRange，案例复核使用完整原始记录。\n');
-    elseif ~hasRef
-        fprintf('[自动复核] 跳过：缺少案例复核所需的参考帧文件。\n');
-    else
-        fprintf('\n[自动复核] 运行 review_right_hip_sweep，结果目录: %s\n', outDir);
-        try
-            review_right_hip_sweep(dataDir, outDir, cfg.reviewShowFigures);
-        catch reviewError
-            warning('analyze_sysid_excitation:ReviewFailed', ...
-                '主分析结果已保存，但右髋补充复核失败：%s', reviewError.message);
-        end
-    end
-end
+fprintf('诊断表格: state_metrics.csv / motor_margin.csv / input_consistency.csv\n');
+fprintf('聚焦频响图: fig6_frf_focus_<通道>.png（每个激励通道一张）\n');
 
 end
 
@@ -1045,11 +1129,12 @@ else
 end
 end
 
-function savefigPng(fh, fname)
+function savefigPng(fh, fname, keepOpen)
+if nargin < 3, keepOpen = false; end
 try
     exportgraphics(fh, fname, 'Resolution', 150);
 catch
     print(fh, fname, '-dpng', '-r150');
 end
-close(fh);
+if ~keepOpen, close(fh); end
 end

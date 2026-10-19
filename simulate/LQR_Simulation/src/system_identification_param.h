@@ -110,7 +110,7 @@ inline constexpr std::uint8_t SYS_ID_EXCITATION_INPUT_MASK = 0x01;
 // MASK 未选中时对应幅值不生效；ENABLE=true 时至少选中一路非零幅值。
 // 增大幅值前检查状态偏移和饱和日志；VMC 映射后的电机力矩可能先达到限幅。
 // 同步 MATLAB cfg.ampExpected；默认尾巴实验可设为 [0,0,0,0,0.05]。
-inline constexpr std::array<double, 5> SYS_ID_EXCITATION_AMPLITUDE = {1.0, 0.2, 0.1, 0.1, 0.05};
+inline constexpr std::array<double, 5> SYS_ID_EXCITATION_AMPLITUDE = {5.0, 0.2, 0.1, 0.1, 0.05};
 
 // -------------------- 3. 正弦扫频 --------------------
 
