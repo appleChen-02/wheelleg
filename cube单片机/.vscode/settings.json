@@ -1,0 +1,19 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.useCMakePresets": "always",
+    "cmake.configureOnOpen": false,
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "stm32cube-ide-clangd.arguments": [
+        "starm-clangd",
+        "--query-driver=**/arm-none-eabi-gcc.exe,**/arm-none-eabi-gcc",
+        "--compile-commands-dir=${workspaceFolder}/build/Debug"
+    ],
+    "cmake.cmakePath": "cube-cmake",
+    "cmake.configureArgs": [
+        "-DCMAKE_COMMAND=cube-cmake"
+    ],
+    "cmake.preferredGenerators": [
+        "Ninja"
+    ],
+    "stm32cube-ide-clangd.path": "cube"
+}

@@ -1,0 +1,18 @@
+#ifndef IMU_H
+#define IMU_H
+
+#include "struct_typedef.h"
+#include "macro_typedef.h"
+
+extern float GetImuAngle(uint8_t axis);
+extern float GetImuAngleSmooth(uint8_t axis);
+extern float GetImuVelocity(uint8_t axis);
+extern float GetImuAccel(uint8_t axis);
+extern float GetYawBias(void);
+extern uint8_t IMU_YawBiasCalibrationIsReady(void);
+
+extern float get_raw_gyro(uint8_t axis);
+extern float get_raw_accel(uint8_t axis);
+
+#endif  // IMU_H
+/*------------------------------ End of File ------------------------------*/

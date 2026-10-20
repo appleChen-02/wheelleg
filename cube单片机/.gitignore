@@ -1,0 +1,22 @@
+# CMake output and machine-local configuration
+/build/
+/CMakeUserPresets.json
+/.cache/
+
+# CubeMX generation cache and debugger logs
+/.mxproject
+/gdbClient_log.txt
+/JLinkLog.txt
+/.vscode/tags
+
+# Generated MATLAB / Simulink caches
+**/slprj/
+**/codegen/
+
+# Editor and backup files
+*.bak
+*.tmp
+*.TMP
+*.orig
+*.rej
+~*

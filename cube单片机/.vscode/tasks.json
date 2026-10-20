@@ -1,0 +1,59 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "STM32: Build Debug",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/tools/build.ps1", "-Configuration", "Debug"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": {
+                "owner": "stm32-gcc",
+                "source": "ARM GCC",
+                "fileLocation": ["autoDetect", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+)(?::(\\d+))?:\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "STM32: Build Release",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/tools/build.ps1", "-Configuration", "Release"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": {
+                "owner": "stm32-gcc",
+                "source": "ARM GCC",
+                "fileLocation": ["autoDetect", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+)(?::(\\d+))?:\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "STM32: Flash BIN (Release)",
+            "detail": "Build Release, program BIN at 0x08000000, verify, and reset.",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/tools/flash.ps1", "-Configuration", "Release"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "STM32: Build Release",
+            "dependsOrder": "sequence",
+            "problemMatcher": [],
+            "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+        }
+    ]
+}

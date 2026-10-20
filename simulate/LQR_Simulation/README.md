@@ -6,6 +6,7 @@
 
 默认使用以下依赖路径：
 
+- MSYS2 UCRT64 工具链：`D:/MSYS2/ucrt64/bin`（GCC、CMake、Ninja）
 - MuJoCo：`D:/mujoco-3.13.0-windows-x86_64`
 - GLFW 源码：`D:/mujoco-3.13.0-windows-x86_64/glfw-3.5.1`
 
@@ -13,28 +14,41 @@
 
 ## 编译
 
-请在项目根目录执行：
+在仓库根目录执行以下命令，会自动配置、编译并打开 Bipedal 仿真窗口：
 
 ```powershell
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
+powershell -NoProfile -ExecutionPolicy Bypass -File .\simulate\LQR_Simulation\run.ps1
 ```
 
-修改 `.cpp` 或 `.h` 文件后，通常只需要重新编译：
+系统辨识同样自动编译，日志默认写入项目的 `logs/sysid_<时间戳>`：
 
 ```powershell
-cmake --build build --parallel
+powershell -NoProfile -ExecutionPolicy Bypass -File .\simulate\LQR_Simulation\run.ps1 -Mode sysid
 ```
 
-可执行文件为 `build/LQRSimulation.exe`。CMake 会自动将 `mujoco.dll` 复制到可执行文件旁边。
+启动脚本支持 `-Headless`、`-Duration 400`、`-Feedback mcu`、`-OutDir logs/实验目录` 和仅编译的 `-BuildOnly`。`-OutDir` 相对本项目目录解析；MSYS2 安装位置不同可传 `-Msys2Root 路径`。系统辨识完成提示出现后，按 Esc 退出并保存。
+
+VS Code 打开整个仓库时，可以在“终端 → 运行任务”中选择 `LQR: Run Bipedal` 或 `LQR: Run System Identification`；`Ctrl+Shift+B` 执行构建，`LQR: Test` 执行集成测试。
+
+手动构建时，在 `simulate/LQR_Simulation` 目录执行：
+
+```powershell
+$env:PATH = 'D:/MSYS2/ucrt64/bin;' + $env:PATH
+cmake -S . -B build/msys2_ucrt64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=D:/MSYS2/ucrt64/bin/gcc.exe -DCMAKE_CXX_COMPILER=D:/MSYS2/ucrt64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=D:/MSYS2/ucrt64/bin/ninja.exe -DLQR_BUILD_SYSID_TESTS=ON
+cmake --build build/msys2_ucrt64 --parallel 4
+```
+
+修改 `.cpp` 或 `.h` 后，可重新运行启动脚本，或执行最后一条编译命令。统一使用 `build/msys2_ucrt64`，避开原 `build` 中的旧路径缓存。
+
+可执行文件为 `build/msys2_ucrt64/LQRSimulation.exe`。CMake 自动为主程序和集成测试复制 MuJoCo 及 MinGW 运行库，无需修改系统 PATH。默认模型路径由 CMake 指向当前源码中的 `models/scene.xml`。
 
 ## 运行
 
-请从项目根目录运行，以确保模型和网格文件的相对路径能够正确解析：
+在 `simulate/LQR_Simulation` 目录可直接运行已编译程序：
 
 ```powershell
-.\build\LQRSimulation.exe --help
-.\build\LQRSimulation.exe --duration 10
+.\build\msys2_ucrt64\LQRSimulation.exe --help
+.\build\msys2_ucrt64\LQRSimulation.exe --duration 10
 ```
 
 常用参数：
@@ -94,14 +108,14 @@ LQR 增益、平衡角与静态力矩系数采用现有固件 TAIL_VERSION=1 的
 无窗口重复实验示例：
 
 ```powershell
-.\build\LQRSimulation.exe --headless --duration 6 --speed 0.3 --yaw-rate 0.2 --console-output --print-period 1
-.\build\LQRSimulation.exe --headless --duration 6 --feedback mcu --console-output --print-period 1
+.\build\msys2_ucrt64\LQRSimulation.exe --headless --duration 6 --speed 0.3 --yaw-rate 0.2 --console-output --print-period 1
+.\build\msys2_ucrt64\LQRSimulation.exe --headless --duration 6 --feedback mcu --console-output --print-period 1
 ```
 
 ## 系统辨识数据采集
 
-参数集中在 `src/system_identification_param.h`，修改后执行 `cmake --build build --parallel`。
-当前头文件配置为：固定双足工作点，左髋通道 `mask=0x02`、幅值 `0.2 N*m`、对数扫频 `0.2→20 Hz / 240 s`。
+参数集中在 `src/system_identification_param.h`，修改后重新运行启动脚本或执行 `cmake --build build/msys2_ucrt64 --parallel`。
+当前头文件配置为：固定双足工作点，位置参考 `-1.6 m`，右髋通道 `mask=0x01`、幅值 `5 N*m`、对数扫频 `0.2→20 Hz / 240 s`。实验配置以头文件为准。
 该功能完成激励与数据采集，A/B 矩阵拟合仍在 MATLAB 中执行。
 
 `SineSweep` 的瞬时频率为 `f(t)=f0*exp(ln(f1/f0)*t/T)`，正弦相位使用该频率的时间积分。
@@ -110,10 +124,11 @@ LQR 增益、平衡角与静态力矩系数采用现有固件 TAIL_VERSION=1 的
 实验记录 `simulation_experiment.txt` 新增 `sweep_law=logarithmic`，CSV 的模式编码仍为 `SineSweep=1`。
 
 从本项目目录运行带窗口的手动停止实验：
-
-```powershell
+$env:PATH = 'D:\MSYS2\ucrt64\bin;' + $env:PATH
 cmake --build build --parallel
-.\build\LQRSimulation.exe --mode sysid --outdir logs/tail_sweep_001
+```powershell
+cmake --build build/msys2_ucrt64 --parallel
+.\build\msys2_ucrt64\LQRSimulation.exe --mode sysid --outdir logs/tail_sweep_001
 ```
 
 流程与命令行提示：
@@ -137,14 +152,14 @@ cmake --build build --parallel
 无窗口手动实验也支持 `Ctrl+C` / `Ctrl+Break` 停止并保存，按实时运行：
 
 ```powershell
-.\build\LQRSimulation.exe --mode sysid --headless --outdir logs/tail_sweep_002
+.\build\msys2_ucrt64\LQRSimulation.exe --mode sysid --headless --outdir logs/tail_sweep_002
 ```
 
 可重复验证或批量采集时指定总仿真时长，无窗口会加速运行：
 
 ```powershell
-.\build\LQRSimulation.exe --mode sysid --headless --duration 400 --outdir logs/log_sweep_003
-.\build\LQRSimulation.exe --mode sysid --headless --duration 400 --feedback mcu --outdir logs/log_sweep_mcu_001
+.\build\msys2_ucrt64\LQRSimulation.exe --mode sysid --headless --duration 400 --outdir logs/log_sweep_003
+.\build\msys2_ucrt64\LQRSimulation.exe --mode sysid --headless --duration 400 --feedback mcu --outdir logs/log_sweep_mcu_001
 ```
 
 `--duration` 包含启动等待、基线、激励及结束响应。当前扫频的记录阶段至少需要 `10+240+10=260 s`，另外还要等待稳定；上例留出稳定等待时间，运行后仍应检查是否出现完成提示。
@@ -165,7 +180,7 @@ cmake --build build --parallel
 | `SYS_ID_BASELINE_DURATION` | 禁用激励时的基线时长，默认 30 s，另加前后各 10 s |
 
 辨识模式以固定参考腿长计算 `K/theta_eq/T0`，不随实际腿长改变插值工作点，不启用动态腿长协调。
-默认位置参考为仿真起点 `0 m`，与固件当前的 `-0.5 m` 不同；如需对应同一参考，请在头文件中修改。
+当前位置参考为 `-1.6 m`，与固件当前的 `-0.5 m` 不同；如需对应同一参考，请在头文件中修改。
 `--speed`、`--yaw-rate`、`--leg-length`、`--tail-angle`、`--pulse` 和 `--zero-gravity` 不用于覆盖辨识工作点。
 
 输出文件：
@@ -186,7 +201,7 @@ cmake --build build --parallel
 
 ```matlab
 cfg.dataDir = 'C:\...\simulate\LQR_Simulation\logs\tail_sweep_001';
-cfg.ampExpected = [0, 0.2, 0, 0, 0];
+cfg.ampExpected = [5, 0, 0, 0, 0];
 cfg.sweepF0 = 0.2;
 cfg.sweepF1 = 20;
 cfg.sweepT = 240;
@@ -205,9 +220,9 @@ CSV 兼容允许复用数据准备流程；完整开环 A/B 的估计还需要�
 集成检查覆盖对数扫频零交叉时刻和低频周期数、真实 MuJoCo 下的扫频/五通道 PRBS/无激励采集、固定增益工作点、电机限幅，以及稳定超时、提前停止、姿态越界：
 
 ```powershell
-cmake -S . -B build -DLQR_BUILD_SYSID_TESTS=ON
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+cmake -S . -B build/msys2_ucrt64 -DLQR_BUILD_SYSID_TESTS=ON
+cmake --build build/msys2_ucrt64 --parallel
+ctest --test-dir build/msys2_ucrt64 --output-on-failure
 ```
 
 如 Python 已配置，可对完整实验校验 USB CSV 列顺序、250 Hz 采样、sequence、激励波形、输入分解和实际力矩（只用标准库）：

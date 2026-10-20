@@ -44,6 +44,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+    DEFAULT_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/models/scene.xml"
+)
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     "${MUJOCO_LIB}"
     glfw
@@ -51,12 +55,40 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE opengl32 shell32)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${MUJOCO_DLL}"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-    )
 endif()
+
+# Keep executables runnable without adding the compiler directory to global PATH.
+set(LQR_RUNTIME_DLLS "${MUJOCO_DLL}")
+if(MINGW)
+    get_filename_component(compiler_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    foreach(runtime_name IN ITEMS libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+        execute_process(
+            COMMAND "${CMAKE_CXX_COMPILER}" "-print-file-name=${runtime_name}"
+            OUTPUT_VARIABLE runtime_path
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE runtime_result
+        )
+        if(NOT EXISTS "${runtime_path}")
+            set(runtime_path "${compiler_bin}/${runtime_name}")
+        endif()
+        if(NOT runtime_result EQUAL 0 OR NOT EXISTS "${runtime_path}")
+            message(FATAL_ERROR "MinGW runtime not found: ${runtime_name}")
+        endif()
+        list(APPEND LQR_RUNTIME_DLLS "${runtime_path}")
+    endforeach()
+endif()
+
+function(lqr_copy_runtime target)
+    if(WIN32)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${LQR_RUNTIME_DLLS} "$<TARGET_FILE_DIR:${target}>"
+            VERBATIM
+        )
+    endif()
+endfunction()
+
+lqr_copy_runtime(${PROJECT_NAME})
 
 message(STATUS "MuJoCo root: ${MUJOCO_ROOT}")
 message(STATUS "GLFW source: ${GLFW_SOURCE_DIR}")
@@ -72,6 +104,7 @@ if(LQR_BUILD_SYSID_TESTS)
     )
     target_include_directories(SysIdIntegration PRIVATE "${MUJOCO_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(SysIdIntegration PRIVATE "${MUJOCO_LIB}")
+    lqr_copy_runtime(SysIdIntegration)
     add_test(NAME sysid_integration COMMAND SysIdIntegration
         "${CMAKE_CURRENT_SOURCE_DIR}/models/scene.xml" "${CMAKE_BINARY_DIR}/sysid_tests")
 endif()

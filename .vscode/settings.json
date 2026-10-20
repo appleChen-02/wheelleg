@@ -1,3 +1,17 @@
 {
-    "cmake.sourceDirectory": "C:/Users/0/Desktop/wheelleg/main_github/wheelleg/simulate/LQR_Simulation"
+    "cmake.sourceDirectory": "${workspaceFolder}/simulate/LQR_Simulation",
+    "cmake.buildDirectory": "${workspaceFolder}/simulate/LQR_Simulation/build/msys2_ucrt64",
+    "cmake.cmakePath": "D:/MSYS2/ucrt64/bin/cmake.exe",
+    "cmake.generator": "Ninja",
+    "cmake.configureSettings": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "D:/MSYS2/ucrt64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "D:/MSYS2/ucrt64/bin/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "D:/MSYS2/ucrt64/bin/ninja.exe",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LQR_BUILD_SYSID_TESTS": "ON"
+    },
+    "cmake.environment": {
+        "PATH": "D:/MSYS2/ucrt64/bin;${env:PATH}"
+    }
 }

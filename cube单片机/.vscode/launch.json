@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32Cube: ST-LINK (Debug)",
+            "type": "stlinkgdbtarget",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "deviceName": "STM32F407IGHx",
+            "deviceCore": "Cortex-M4",
+            "preLaunchTask": "STM32: Build Debug",
+            "preBuild": "",
+            "runEntry": "main",
+            "serverInterface": "SWD",
+            "serverInterfaceFrequency": "1000",
+            "serverVerify": true,
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/Debug/standard_robot.elf",
+                    "symbolFileName": "${workspaceFolder}/build/Debug/standard_robot.elf"
+                }
+            ]
+        }
+    ]
+}

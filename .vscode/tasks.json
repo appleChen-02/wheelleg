@@ -1,0 +1,36 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "LQR: Build",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/simulate/LQR_Simulation/run.ps1", "-BuildOnly"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "LQR: Run Bipedal",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/simulate/LQR_Simulation/run.ps1"],
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "LQR: Run System Identification",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/simulate/LQR_Simulation/run.ps1", "-Mode", "sysid"],
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "LQR: Test",
+            "type": "process",
+            "command": "D:/MSYS2/ucrt64/bin/ctest.exe",
+            "args": ["--test-dir", "${workspaceFolder}/simulate/LQR_Simulation/build/msys2_ucrt64", "--output-on-failure"],
+            "dependsOn": "LQR: Build",
+            "group": "test",
+            "problemMatcher": []
+        }
+    ]
+}
