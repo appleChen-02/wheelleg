@@ -76,6 +76,39 @@ void CheckLogSweep(mjModel* model, const RobotMap& map, const std::filesystem::p
     Require(rejected, "Log sweep accepted a zero start frequency");
 }
 
+void CheckAutoExit(mjModel* model, const RobotMap& map, const std::filesystem::path& outdir) {
+    for (const auto mode : {SystemIdentificationExcitation::SineSweep,
+                            SystemIdentificationExcitation::Prbs,
+                            SystemIdentificationExcitation::Disabled}) {
+        SystemIdentificationParameters p;
+        p.excitation_mode = mode;
+        p.sweep_duration = p.prbs_duration = p.baseline_duration = 0.2;
+        p.min_settle_seconds = 0.0;
+        p.stable_seconds = kControlPeriod;
+        p.pre_seconds = 0.1;
+        p.post_seconds = 0.3;
+        const auto state = StableState();
+        SystemIdentificationExperiment e(model, map, outdir / ("auto_exit_" + std::to_string(static_cast<int>(mode))),
+                                         FeedbackSource::Truth, p);
+        e.Advance(0.0, state);
+        Require(!e.ShouldAutoExit(1000.0), "Auto exit during stability waiting");
+        e.Advance(0.002, state);
+        Require(!e.ShouldAutoExit(1000.0), "Auto exit during pre-excitation baseline");
+        e.Advance(0.102, state);
+        Require(!e.ShouldAutoExit(1000.0), "Auto exit during excitation or baseline capture");
+        e.Advance(0.302, state);
+        Require(e.phase() == SystemIdentificationExperiment::Phase::Post, "Post-response capture was skipped");
+        Require(!e.ShouldAutoExit(1000.0), "Auto exit before post-response capture completed");
+        constexpr double complete_time = 0.602;
+        e.Advance(complete_time, state);
+        Require(e.phase() == SystemIdentificationExperiment::Phase::Complete, "Capture did not complete");
+        Require(!e.ShouldAutoExit(complete_time + 5.0 - kPhysicsPeriod), "Auto exit before the full five second delay");
+        Require(e.Advance(complete_time + 1.0, state) == std::array<double, 5>{}, "Excitation resumed after completion");
+        Require(e.ShouldAutoExit(complete_time + 5.0), "Auto exit deadline moved or did not expire");
+        e.Finish("auto_exit_after_capture");
+    }
+}
+
 void RunPhysicalCase(mjModel* model, const RobotMap& map, const std::filesystem::path& outdir,
                      SystemIdentificationParameters p) {
     std::unique_ptr<mjData, decltype(&mj_deleteData)> data(mj_makeData(model), mj_deleteData);
@@ -87,11 +120,14 @@ void RunPhysicalCase(mjModel* model, const RobotMap& map, const std::filesystem:
     controller.SetMode(ControlMode::SystemIdentification);
     SystemIdentificationExperiment experiment(model, map, outdir, FeedbackSource::Truth, p);
     double next_control = 0.0;
+    double complete_time = -1.0;
     RobotState last_state;
-    while (data->time < 35.0) {
+    while (data->time < 35.0 && !experiment.ShouldAutoExit(data->time)) {
         if (data->time + 0.5 * kPhysicsPeriod >= next_control) {
             last_state = reader.Read(data.get(), map, kControlPeriod);
             const auto excitation = experiment.Advance(data->time, last_state);
+            if (complete_time < 0.0 && experiment.phase() == SystemIdentificationExperiment::Phase::Complete)
+                complete_time = data->time;
             const auto command = controller.Compute(last_state, excitation);
             for (int i = 0; i < 7; ++i) SetActuatorTorque(map, data.get(), i, command.actuator_torque[i]);
             mj_fwdActuation(model, data.get());
@@ -102,7 +138,10 @@ void RunPhysicalCase(mjModel* model, const RobotMap& map, const std::filesystem:
         reader.UpdateImuRoll(data.get(), map);
     }
     Require(experiment.phase() == SystemIdentificationExperiment::Phase::Complete, "Physical experiment did not finish");
-    experiment.Finish("integration_test");
+    Require(experiment.ShouldAutoExit(data->time), "Physical experiment did not reach automatic exit");
+    Require(std::abs(data->time - complete_time - p.auto_exit_delay_seconds) < kPhysicsPeriod,
+            "Physical experiment exited at the wrong time after completion");
+    experiment.Finish("auto_exit_after_capture");
 
     // 固定 K/theta_eq/T0 应不随实际腿长改变；腿长 PID 的径向力允许改变。
     const auto c1 = controller.Compute(last_state);
@@ -136,6 +175,7 @@ int main(int argc, char** argv) {
         const auto root = std::filesystem::path(argv[2]) / std::to_string(stamp);
 
         CheckLogSweep(model.get(), map, root);
+        CheckAutoExit(model.get(), map, root);
         SystemIdentificationParameters p;
         p.excitation_mode = SystemIdentificationExcitation::Prbs;
         p.input_mask = 0x1F;
@@ -170,6 +210,7 @@ int main(int argc, char** argv) {
             Require(e.phase() == SystemIdentificationExperiment::Phase::Waiting, "Interrupted stability timer was not reset");
             e.Advance(0.1, s);
             Require(e.phase() == SystemIdentificationExperiment::Phase::Aborted, "Stability timeout did not abort");
+            Require(!e.ShouldAutoExit(1000.0), "Aborted experiment was treated as complete for auto exit");
             e.Finish("timeout_test");
         }
         // 提前停止保留完整 CSV 表头和未完成标志；姿态越界立即关闭激励。

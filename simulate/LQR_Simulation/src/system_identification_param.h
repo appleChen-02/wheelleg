@@ -6,8 +6,8 @@
  *   1. 修改本文件中的 SYS_ID_* 常量。
  *   2. 在 simulate/LQR_Simulation 目录执行：cmake --build build --parallel。
  *   3. 启动新进程：.\build\LQRSimulation.exe --mode sysid --outdir logs/实验目录。
- *   4. 等待 IDENTIFICATION_CAPTURE_FINISHED，再按 Esc 或关闭仿真窗口保存。
- *      无窗口运行时可用 Ctrl+C / Ctrl+Break 正常停止并保存。
+ *   4. 等待 IDENTIFICATION_CAPTURE_FINISHED，默认再运行 5 s 仿真时间后自动保存并退出。
+ *      也可按 Esc / 关闭窗口，或在无窗口运行时用 Ctrl+C / Ctrl+Break 提前停止并保存。
  *
  * 本文件是 C++ 编译期配置，不是在运行时读取的配置文件：
  *   - 修改参数后必须重新编译，并重新启动程序；运行中的实验不会自动更新参数。
@@ -18,8 +18,8 @@
  *
  * 实验时序（各时长均为仿真时间，不是程序运行的墙钟时间）：
  *   等待连续稳定 → 记录激励前基线 → 激励/无激励正式采集 → 记录结束响应
- *   → 打印采集完成提示 → 继续保持 LQR 和记录，等待手动停止。
- *   总仿真时长 = 实际稳定等待时间 + PRE + 正式采集时长 + POST。
+ *   → 打印采集完成提示 → 继续保持 LQR 和记录 5 s → 自动保存并退出。
+ *   总仿真时长 = 实际稳定等待时间 + PRE + 正式采集时长 + POST + AUTO_EXIT_DELAY。
  *   --duration 限制的是上述总时间，过早退出会标记为未完成。
  *
  * 控制与日志约定：
@@ -149,14 +149,14 @@ inline constexpr std::array<std::uint16_t, 5> SYS_ID_PRBS_SEEDS = {0xACE1, 0x1D0
 
 // PRBS 正式激励时长，s，必须 >0；不包括稳定等待和前后基线。
 // 与固件持续到退出模式的行为不同，仿真规定终点，以便输出采集完成提示。
-// 到期自动停止激励，采集结束响应后等待手动退出保存。
+// 到期自动停止激励，采集结束响应后进入自动退出倒计时。
 inline constexpr double SYS_ID_PRBS_DURATION = 120.0;
 
 // -------------------- 5. 采集时序与稳定等待 --------------------
 
 // 无激励“正式基线阶段”的时长，s，必须 >0。
 // ENABLE=false 或 MODE=Disabled 时生效，扫频/PRBS 实验不使用此时长。
-// 默认稳定后的总记录阶段为 10+30+10=50 s，再进入等待手动停止阶段。
+// 默认稳定后的计划采集阶段为 10+30+10=50 s，再额外记录 5 s 后自动退出。
 inline constexpr double SYS_ID_BASELINE_DURATION = 30.0;
 
 // 连续稳定确认后、正式激励前的无激励记录时长，s，必须 >=0。
@@ -165,13 +165,17 @@ inline constexpr double SYS_ID_BASELINE_DURATION = 30.0;
 inline constexpr double SYS_ID_PRE_EXCITATION_SECONDS = 10.0;
 
 // 正式采集到期后，关闭激励并记录自由恢复响应的最短时长，s，必须 >=0。
-// 到期输出 IDENTIFICATION_CAPTURE_FINISHED，此后仍记录，直到手动停止。
+// 到期输出 IDENTIFICATION_CAPTURE_FINISHED，此后继续记录至自动退出。
 inline constexpr double SYS_ID_POST_EXCITATION_SECONDS = 10.0;
+
+// 完成全部采集阶段后继续保持 LQR 和记录的仿真时长，s，必须有限且 >=0。
+// 到期自动保存 CSV 并退出；暂停仿真时倒计时也暂停，设为 0 则完成后立即退出。
+inline constexpr double SYS_ID_AUTO_EXIT_DELAY_SECONDS = 5.0;
 
 // 命令行进度输出间隔，单位为仿真秒，必须 >0；无需打开 --console-output。
 // “已采集/总时长”从稳定后打开 CSV 时开始计时，总时长为 PRE+正式采集+POST，
 // 不含启动等待。无激励时正式采集采用 BASELINE_DURATION，扫频/PRBS 用各自时长。
-// 阶段切换时额外立即打印一次；完成后显示 100% 和额外记录时长，等待手动保存。
+// 阶段切换时额外立即打印一次；完成后显示 100%、额外记录时长和自动退出剩余时间。
 inline constexpr double SYS_ID_PROGRESS_PERIOD_SECONDS = 10.0;
 static_assert(SYS_ID_PROGRESS_PERIOD_SECONDS > 0.0, "SYS_ID progress period must be positive");
 
@@ -278,6 +282,7 @@ struct SystemIdentificationParameters {
     double baseline_duration = SYS_ID_BASELINE_DURATION;  // 无激励正式采集时长，s。
     double pre_seconds = SYS_ID_PRE_EXCITATION_SECONDS;  // 激励前基线时长，s。
     double post_seconds = SYS_ID_POST_EXCITATION_SECONDS;  // 最短结束响应记录时长，s。
+    double auto_exit_delay_seconds = SYS_ID_AUTO_EXIT_DELAY_SECONDS;  // 采集完成后自动退出的延迟，仿真秒。
     double stable_seconds = SYS_ID_STABLE_REQUIRED_SECONDS;  // 连续稳定确认时长，s。
     double min_settle_seconds = SYS_ID_MIN_SETTLE_SECONDS;  // 最早开始稳定确认的仿真时刻，s。
     double settle_timeout_seconds = SYS_ID_SETTLE_TIMEOUT_SECONDS;  // 稳定等待截止时刻，s。

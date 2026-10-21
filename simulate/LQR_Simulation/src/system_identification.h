@@ -23,6 +23,8 @@ public:
     void Record(double time, const RobotState& state, const ControlCommand& command,
                 const mjData* data);
     void Finish(const std::string& reason);
+    // 采集完成后的仿真时间倒计时到期时，由主循环正常保存并退出。
+    bool ShouldAutoExit(double time) const;
     const char* PhaseName() const;
     Phase phase() const { return phase_; }
 
@@ -47,6 +49,7 @@ private:
     double recording_start_ = -1.0;
     double excitation_start_ = -1.0;
     double excitation_end_ = -1.0;
+    double capture_complete_time_ = -1.0;
     double last_time_ = 0.0;
     double next_progress_time_ = 0.0;
     double host_epoch_ = 0.0;

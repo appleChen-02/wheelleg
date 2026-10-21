@@ -426,7 +426,9 @@ int main(int argc, char** argv) {
                          "                 [--zero-gravity] [--pulse actuator torque_nm]\n"
                          "                 [--outdir directory] (sysid CSV output)\n"
                          "SYSID parameters: src/system_identification_param.h (rebuild after editing).\n"
-                         "SYSID: wait for stability, record baseline, excite, notify completion; stop with Esc / Ctrl+C to save.\n"
+                         "SYSID: wait for stability, record baseline, excite, capture post-response; auto-save and exit after "
+                      << SYS_ID_AUTO_EXIT_DELAY_SECONDS << " more simulation seconds.\n"
+                      << "Esc / Ctrl+C can stop and save early.\n"
                          "--duration is total simulation time; stopping early produces an incomplete capture.\n";
             return 0;
         }
@@ -551,7 +553,8 @@ int main(int argc, char** argv) {
         double next_render_time = data->time;
 
         const auto run_wall_start = std::chrono::steady_clock::now();
-        while (!g_stop_requested && (!window || !glfwWindowShouldClose(window)) && (duration <= 0.0 || data->time < duration)) {
+        while (!g_stop_requested && (!window || !glfwWindowShouldClose(window)) &&
+               (duration <= 0.0 || data->time < duration) && (!sysid || !sysid->ShouldAutoExit(data->time))) {
             bool render_reset_frame = false;
             if (g_reset_state_reader) {
                 state_reader.Reset();
@@ -616,7 +619,7 @@ int main(int argc, char** argv) {
                 mj_step(model, data);
                 state_reader.UpdateImuRoll(data, map);
                 if (headless && sysid && duration <= 0.0) {
-                    // 手动停止的无窗口实验按实时运行，给操作者留出停止时间。
+                    // 未指定时长的无窗口实验按实时运行，支持手动停止或采集完成后自动退出。
                     std::this_thread::sleep_until(run_wall_start +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(data->time)));
                 }
@@ -660,7 +663,8 @@ int main(int argc, char** argv) {
 
         if (sysid) {
             const std::string reason = g_stop_requested ? "signal" :
-                (window && glfwWindowShouldClose(window) ? "manual_window_stop" : "duration_limit");
+                (window && glfwWindowShouldClose(window) ? "manual_window_stop" :
+                 (sysid->ShouldAutoExit(data->time) ? "auto_exit_after_capture" : "duration_limit"));
             sysid->Finish(reason);
         }
         g_sysid = nullptr;

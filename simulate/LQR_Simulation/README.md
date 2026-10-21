@@ -26,7 +26,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\simulate\LQR_Simulation\ru
 powershell -NoProfile -ExecutionPolicy Bypass -File .\simulate\LQR_Simulation\run.ps1 -Mode sysid
 ```
 
-启动脚本支持 `-Headless`、`-Duration 400`、`-Feedback mcu`、`-OutDir logs/实验目录` 和仅编译的 `-BuildOnly`。`-OutDir` 相对本项目目录解析；MSYS2 安装位置不同可传 `-Msys2Root 路径`。系统辨识完成提示出现后，按 Esc 退出并保存。
+启动脚本支持 `-Headless`、`-Duration 400`、`-Feedback mcu`、`-OutDir logs/实验目录` 和仅编译的 `-BuildOnly`。`-OutDir` 相对本项目目录解析；MSYS2 安装位置不同可传 `-Msys2Root 路径`。系统辨识完成提示出现后，再运行 5 秒仿真时间，自动保存并退出。
 
 VS Code 打开整个仓库时，可以在“终端 → 运行任务”中选择 `LQR: Run Bipedal` 或 `LQR: Run System Identification`；`Ctrl+Shift+B` 执行构建，`LQR: Test` 执行集成测试。
 
@@ -66,7 +66,7 @@ cmake --build build/msys2_ucrt64 --parallel 4
 --yaw-rate rad/s                     初始航向角速度指令
 --leg-length m                       bipedal 目标腿长（默认 0.18 m）
 --tail-angle rad                     bipedal 尾角指令（默认 0 rad）
---headless                           无窗口运行；普通模式默认 5 秒，sysid 等待手动停止
+--headless                           无窗口运行；普通模式默认 5 秒，sysid 采集完成 5 秒后自动退出
 --zero-gravity                       启用零重力模式
 --pulse actuator torque_nm           对指定执行器施加力矩脉冲
 --pulse-start seconds                指定力矩脉冲开始时间
@@ -123,7 +123,7 @@ LQR 增益、平衡角与静态力矩系数采用现有固件 TAIL_VERSION=1 的
 起始频率必须大于零。对数扫频增加低频周期，但各倍频程的周期数仍不同；需要更多低频周期时可继续增加扫频时长。
 实验记录 `simulation_experiment.txt` 新增 `sweep_law=logarithmic`，CSV 的模式编码仍为 `SineSweep=1`。
 
-从本项目目录运行带窗口的手动停止实验：
+从本项目目录运行带窗口的自动采集实验：
 $env:PATH = 'D:\MSYS2\ucrt64\bin;' + $env:PATH
 cmake --build build --parallel
 ```powershell
@@ -137,7 +137,7 @@ cmake --build build/msys2_ucrt64 --parallel
 2. `STABLE`：打开 CSV，保留 10 s 的无激励稳态基线；启动瞬态不写入 CSV。基线失去稳定时中止实验，不启动激励。
 3. `EXCITATION_STARTED`：按头文件配置执行扫频或 PRBS。激励叠加在 LQR 广义力矩之后、VMC 和电机限幅之前。
 4. `EXCITATION_FINISHED`：停止激励，继续记录至少 10 s 的结束响应，LQR 保持运行。
-5. `IDENTIFICATION_CAPTURE_FINISHED`：采集所需阶段已结束，闭环和记录继续运行。此时按 **Esc** 或关闭仿真窗口，程序关闭文件并打印 `DATA_SAVED` 和保存路径。窗口中可暂停/继续和调整视角；运动、工作点、模式切换、重置、额外扰动及关闭输出操作被锁定。
+5. `IDENTIFICATION_CAPTURE_FINISHED`：采集所需阶段已结束，闭环和记录继续运行 5 秒仿真时间，然后自动保存 CSV、关闭窗口并退出，打印 `DATA_SAVED` 和保存路径，停止原因为 `auto_exit_after_capture`。倒计时从结束响应采集完成时开始，由 `SYS_ID_AUTO_EXIT_DELAY_SECONDS` 配置；暂停仿真时倒计时也暂停。也可按 **Esc** 或关闭窗口提前停止并保存。窗口中可暂停/继续和调整视角；运动、工作点、模式切换、重置、额外扰动及关闭输出操作被锁定。
 
 命令行默认每 10 秒仿真时间输出一次进度，阶段切换时也立即输出，无需 `--console-output`：
 
@@ -146,10 +146,10 @@ cmake --build build/msys2_ucrt64 --parallel
 ```
 
 已采集时长从稳定后开始写 CSV 时计算，总时长包含激励前基线、正式激励/无激励基线、结束响应，不包含等待稳定的时间。
-等待稳定时显示等待时长和连续稳定时长；采集完成后显示 100% 和额外记录时长。
+等待稳定时显示等待时长和连续稳定时长；采集完成后显示 100%、额外记录时长和自动退出剩余时间。
 输出间隔可在头文件中修改 `SYS_ID_PROGRESS_PERIOD_SECONDS`，修改后重新编译。
 
-无窗口手动实验也支持 `Ctrl+C` / `Ctrl+Break` 停止并保存，按实时运行：
+无窗口实验未指定 `--duration` 时按实时运行，采集完成 5 秒后自动保存退出，也支持 `Ctrl+C` / `Ctrl+Break` 提前停止并保存：
 
 ```powershell
 .\build\msys2_ucrt64\LQRSimulation.exe --mode sysid --headless --outdir logs/tail_sweep_002
@@ -162,7 +162,7 @@ cmake --build build/msys2_ucrt64 --parallel
 .\build\msys2_ucrt64\LQRSimulation.exe --mode sysid --headless --duration 400 --feedback mcu --outdir logs/log_sweep_mcu_001
 ```
 
-`--duration` 包含启动等待、基线、激励及结束响应。当前扫频的记录阶段至少需要 `10+240+10=260 s`，另外还要等待稳定；上例留出稳定等待时间，运行后仍应检查是否出现完成提示。
+`--duration` 限制总仿真时长，包含启动等待、基线、激励、结束响应及自动退出延迟；达到时长上限或完成后 5 秒倒计时到期，任一条件先满足就退出。当前扫频的计划采集阶段需要 `10+240+10=260 s`，再额外记录 5 s，另需等待稳定；上例留出稳定等待时间，运行后仍应检查是否出现完成提示。
 提前停止或超时/姿态越界会保存已有数据，并在实验记录中标记未完成/中止。已存在日志的目录会报错，避免覆盖旧实验。
 
 常用头文件配置：
@@ -178,6 +178,7 @@ cmake --build build/msys2_ucrt64 --parallel
 | `SYS_ID_PRBS_SEEDS` | 与固件相同的 16 位 LFSR 算法；同配置可复现，验证实验可换种子 |
 | `SYS_ID_LEG_LENGTH` / `SYS_ID_REFERENCE` | 腿长和 18 项参考；前 12 项为 LQR 状态，腿角参考还会叠加模型 `theta_eq`；参考速度必须为零 |
 | `SYS_ID_BASELINE_DURATION` | 禁用激励时的基线时长，默认 30 s，另加前后各 10 s |
+| `SYS_ID_AUTO_EXIT_DELAY_SECONDS` | 采集完成后继续记录并自动退出的延迟，默认 5 秒仿真时间；设为 0 则完成后立即退出 |
 
 辨识模式以固定参考腿长计算 `K/theta_eq/T0`，不随实际腿长改变插值工作点，不启用动态腿长协调。
 当前位置参考为 `-1.6 m`，与固件当前的 `-0.5 m` 不同；如需对应同一参考，请在头文件中修改。

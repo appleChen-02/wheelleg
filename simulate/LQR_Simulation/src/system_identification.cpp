@@ -73,7 +73,7 @@ SystemIdentificationExperiment::SystemIdentificationExperiment(
     for (double v : {p.sweep_duration, p.prbs_duration, p.baseline_duration, p.stable_seconds, p.settle_timeout_seconds}) {
         if (!std::isfinite(v) || v <= 0.0) throw std::invalid_argument("SYS_ID durations must be finite and positive");
     }
-    for (double v : {p.pre_seconds, p.post_seconds, p.min_settle_seconds}) {
+    for (double v : {p.pre_seconds, p.post_seconds, p.min_settle_seconds, p.auto_exit_delay_seconds}) {
         if (!std::isfinite(v) || v < 0.0) throw std::invalid_argument("SYS_ID wait times must be finite and nonnegative");
     }
     if (!std::isfinite(p.sweep_f0) || !std::isfinite(p.sweep_f1) || p.sweep_f0 <= 0.0 ||
@@ -120,6 +120,11 @@ double SystemIdentificationExperiment::ExcitationDuration() const {
         ? parameters_.sweep_duration : parameters_.prbs_duration;
 }
 
+bool SystemIdentificationExperiment::ShouldAutoExit(double time) const {
+    return phase_ == Phase::Complete &&
+           time - capture_complete_time_ + 1e-9 >= parameters_.auto_exit_delay_seconds;
+}
+
 void SystemIdentificationExperiment::PrintProgress(double time, bool force) {
     if (!force && (phase_ == Phase::Aborted || time + 1e-9 < next_progress_time_)) return;
     next_progress_time_ = time + SYS_ID_PROGRESS_PERIOD_SECONDS;
@@ -138,7 +143,8 @@ void SystemIdentificationExperiment::PrintProgress(double time, bool force) {
         line << "; waited=" << time << '/' << parameters_.settle_timeout_seconds
              << " s; continuous_stable=" << stable << '/' << parameters_.stable_seconds << " s";
     } else if (phase_ == Phase::Complete) {
-        line << "; extra_recorded=" << std::max(0.0, recorded - total) << " s; stop manually to save";
+        line << "; extra_recorded=" << std::max(0.0, recorded - total)
+             << " s; auto_exit_in=" << std::max(0.0, parameters_.auto_exit_delay_seconds - (time - capture_complete_time_)) << " s";
     } else if (phase_ == Phase::Aborted) {
         line << "; capture aborted; stop manually to save";
     } else {
@@ -247,8 +253,10 @@ std::array<double, 5> SystemIdentificationExperiment::Advance(double time, const
     }
     if (phase_ == Phase::Post && time - excitation_end_ + 1e-9 >= parameters_.post_seconds) {
         phase_ = Phase::Complete;
+        capture_complete_time_ = time;
         std::cout << "[SYSID] IDENTIFICATION_CAPTURE_FINISHED: excitation and post-response capture complete.\n"
-                  << "[SYSID] LQR and recording remain ON. Press Esc / close the window / Ctrl+C to stop and save CSV.\n" << std::flush;
+                  << "[SYSID] LQR and recording remain ON; automatically saving CSV and exiting in "
+                  << parameters_.auto_exit_delay_seconds << " s of simulation time.\n" << std::flush;
     }
     PrintProgress(time, phase_ != previous_phase);
     return excitation;
@@ -350,6 +358,8 @@ void SystemIdentificationExperiment::WriteMetadata(const std::string& reason) {
         << "\nrows=" << rows_ << "\nlast_sim_time_s=" << last_time_
         << "\nrecording_start_s=" << recording_start_ << "\nexcitation_start_s=" << excitation_start_
         << "\nplanned_excitation_end_s=" << excitation_end_
+        << "\ncapture_complete_s=" << capture_complete_time_
+        << "\nauto_exit_delay_s=" << parameters_.auto_exit_delay_seconds
         << "\ncontrol_period_s=" << kControlPeriod << "\nsample_period_s=0.004\nreference_period_s=1\n"
         << "host_time_s=logical epoch plus simulation time, not wall-clock arrival time\n"
         << "timing=x[k] before stepping; u[k] newly computed; actual[k] from mj_fwdActuation at x[k],u[k]\n"
